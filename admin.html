@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JET — Panel Admin</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <style>
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; }
+    th { background: var(--jet-light); font-weight: 600; font-size: 12px; color: var(--jet-gray); text-transform: uppercase; }
+    .card { background: white; border-radius: var(--radius); padding: 18px; margin-bottom: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .card h3 { font-size: 16px; margin-bottom: 10px; }
+    .empty { text-align: center; color: var(--jet-gray); padding: 24px; font-size: 14px; }
+    .week-row { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #f0f0f0; }
+    .week-row:last-child { border: none; }
+    .badge { background: var(--jet-orange); color: white; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .photo-link { color: var(--jet-orange); font-size: 11px; text-decoration: none; }
+    .photo-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <header class="brand">
+      <h1>JET</h1>
+      <p class="tagline">Panel de Administración</p>
+    </header>
+
+    <section id="auth-view">
+      <label class="field">
+        <span>Token de acceso</span>
+        <input type="password" id="token" placeholder="••••••••" />
+      </label>
+      <button class="btn btn-primary" id="btn-load">Acceder</button>
+    </section>
+
+    <section id="report-view" style="display:none;">
+      <div class="card">
+        <h3>Hoy <span id="today-date" class="badge"></span></h3>
+        <div id="today-list"></div>
+      </div>
+      <div class="card">
+        <h3>Resumen semanal <small style="color:var(--jet-gray);font-weight:normal" id="week-since"></small></h3>
+        <div id="week-list"></div>
+      </div>
+      <button class="btn btn-secondary" id="btn-refresh">Actualizar</button>
+      <button class="btn btn-danger" id="btn-logout-admin" style="margin-top:10px;">Salir</button>
+    </section>
+
+    <div id="overlay" class="overlay hidden">
+      <div class="spinner"></div>
+      <p id="overlay-text">Cargando…</p>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/config.js"></script>
+  <script>
+    const sb = window.supabase.createClient(
+      window.JET_CONFIG.SUPABASE_URL,
+      window.JET_CONFIG.SUPABASE_KEY
+    );
+    const CFG = window.JET_CONFIG;
+    const $ = sel => document.querySelector(sel);
+
+    function showOverlay(t) { $("#overlay-text").textContent = t || "Cargando..."; $("#overlay").classList.remove("hidden"); }
+    function hideOverlay() { $("#overlay").classList.add("hidden"); }
+
+    function todayStr() {
+      return new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+    }
+    function getMondayStr() {
+      const d = new Date();
+      const day = (d.getDay() + 6) % 7; // Mon=0...Sun=6
+      d.setDate(d.getDate() - day);
+      return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+    }
+
+    function parseHHMM(s) {
+      if (!s) return 0;
+      const p = String(s).split(":").map(Number);
+      return (p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0);
+    }
+    function fmtH(secs) {
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      return h + "h " + (m < 10 ? "0" : "") + m + "m";
+    }
+
+    $("#btn-load").addEventListener("click", load);
+    $("#btn-refresh").addEventListener("click", load);
+    $("#btn-logout-admin").addEventListener("click", () => {
+      sessionStorage.removeItem("jet_admin_ok");
+      $("#auth-view").style.display = "block";
+      $("#report-view").style.display = "none";
+      $("#token").value = "";
+    });
+
+    async function load() {
+      const tokenInput = $("#token").value;
+      const stored = sessionStorage.getItem("jet_admin_ok");
+      if (!stored && tokenInput !== CFG.ADMIN_TOKEN) {
+        alert("Token incorrecto");
+        return;
+      }
+      sessionStorage.setItem("jet_admin_ok", "1");
+
+      showOverlay();
+      try {
+        const today = todayStr();
+        const monday = getMondayStr();
+
+        // Hoy
+        const { data: todayRows, error: e1 } = await sb
+          .from("turnos")
+          .select("*")
+          .eq("fecha", today)
+          .order("entrada", { ascending: true });
+        if (e1) throw e1;
+
+        // Esta semana (desde lunes)
+        const { data: weekRows, error: e2 } = await sb
+          .from("turnos")
+          .select("empleado, fecha, horas_trab")
+          .gte("fecha", monday);
+        if (e2) throw e2;
+
+        render(todayRows || [], weekRows || [], today, monday);
+      } catch (err) {
+        alert("Error: " + err.message);
+      } finally {
+        hideOverlay();
+      }
+    }
+
+    function render(today, week, todayStr, mondayStr) {
+      $("#auth-view").style.display = "none";
+      $("#report-view").style.display = "block";
+      $("#today-date").textContent = todayStr;
+      $("#week-since").textContent = "desde " + mondayStr;
+
+      // HOY
+      const todayList = $("#today-list");
+      todayList.innerHTML = "";
+      if (!today.length) {
+        todayList.innerHTML = "<div class='empty'>Aún nadie ha fichado hoy</div>";
+      } else {
+        const tbl = document.createElement("table");
+        tbl.innerHTML = "<thead><tr>" +
+          "<th>Empleado</th><th>Punto</th><th>Entrada</th><th>Salida</th>" +
+          "<th>Horas</th><th>Fotos</th></tr></thead>";
+        const tb = document.createElement("tbody");
+        today.forEach(r => {
+          const tr = document.createElement("tr");
+          const photos = [
+            r.foto_entrada ? `<a class="photo-link" href="${r.foto_entrada}" target="_blank">▶</a>` : "",
+            r.foto_ini_desc ? `<a class="photo-link" href="${r.foto_ini_desc}" target="_blank">🍴</a>` : "",
+            r.foto_fin_desc ? `<a class="photo-link" href="${r.foto_fin_desc}" target="_blank">↩</a>` : "",
+            r.foto_salida ? `<a class="photo-link" href="${r.foto_salida}" target="_blank">⏹</a>` : "",
+          ].filter(Boolean).join(" ");
+          tr.innerHTML =
+            `<td>${r.empleado}</td><td>${r.punto}</td>` +
+            `<td>${r.entrada || "—"}</td><td>${r.salida || "—"}</td>` +
+            `<td>${r.horas_trab || "—"}</td><td>${photos}</td>`;
+          tb.appendChild(tr);
+        });
+        tbl.appendChild(tb);
+        todayList.appendChild(tbl);
+      }
+
+      // SEMANA — agrupar por empleado
+      const totals = {};
+      week.forEach(r => {
+        if (!totals[r.empleado]) totals[r.empleado] = { dias: 0, segs: 0 };
+        totals[r.empleado].dias++;
+        totals[r.empleado].segs += parseHHMM(r.horas_trab);
+      });
+      const weekList = $("#week-list");
+      weekList.innerHTML = "";
+      const sorted = Object.keys(totals).sort();
+      if (!sorted.length) {
+        weekList.innerHTML = "<div class='empty'>Sin datos esta semana</div>";
+      } else {
+        sorted.forEach(emp => {
+          const t = totals[emp];
+          const div = document.createElement("div");
+          div.className = "week-row";
+          div.innerHTML = `<span>${emp}</span><span><strong>${fmtH(t.segs)}</strong> · ${t.dias} días</span>`;
+          weekList.appendChild(div);
+        });
+      }
+    }
+
+    // Auto-load if previously authenticated this session
+    if (sessionStorage.getItem("jet_admin_ok")) load();
+  </script>
+</body>
+</html>
