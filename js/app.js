@@ -180,6 +180,18 @@ async function loadMe() {
     emp = e;
   } catch {}
 
+  // Auto-aprobar a admins (un admin no necesita esperar aprobación para tener su perfil de empleado)
+  if (isAdmin && emp && !emp.activo) {
+    try {
+      const { error } = await sb.from("empleados").update({
+        activo: true,
+        aprobado_at: new Date().toISOString(),
+        aprobado_por: email,
+      }).eq("id", emp.id);
+      if (!error) emp.activo = true;
+    } catch {}
+  }
+
   me = {
     auth_user_id: userId, email,
     nombre: emp ? emp.nombre : null,
