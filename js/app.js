@@ -189,7 +189,11 @@ async function loadMe() {
   };
   showTabs();
 
-  if (me.isAdmin && !emp) { switchTab("admin"); return; }
+  // Admin SIEMPRE va al panel admin (incluso si tiene cuenta empleado pendiente)
+  if (me.isAdmin) {
+    switchTab("admin");
+    return;
+  }
 
   if (!emp) {
     toast("No hay datos de empleado. Completa el registro.", "error");
