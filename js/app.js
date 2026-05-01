@@ -12,13 +12,18 @@ const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
 
 // ── State ───────────────────────────────────────────────────────────────────
-let session = null;       // { id, nombre }
+let session = null;       // { id, nombre } для empleado
+let adminSession = null;  // { email } для admin
+let isAdmin = false;
 let pendingAction = null;
-let currentGPS = null;    // {lat, lng}
-let nearestPark = null;   // {name, distance}
+let currentGPS = null;
+let nearestPark = null;
 let map = null;
 let userMarker = null;
 let parkMarkers = {};
+
+// Expose for admin.js
+window.JET = { sb, $, $$, CFG };
 
 // ── UI helpers ──────────────────────────────────────────────────────────────
 function showView(id) {
@@ -78,6 +83,7 @@ $("#btn-continuar").addEventListener("click", () => {
   if (!v) { toast("Selecciona tu nombre", "error"); return; }
   session = JSON.parse(v);
   saveSession(session);
+  showTabs();
   checkActiveAndProceed();
 });
 
@@ -116,6 +122,7 @@ $("#btn-register").addEventListener("click", async () => {
     session = { id: data.id, nombre: data.nombre };
     saveSession(session);
     toast("Solicitud enviada. Espera aprobación.", "success");
+    showTabs();
     showPending();
   } catch (e) {
     toast(e.message || String(e), "error");
@@ -124,12 +131,7 @@ $("#btn-register").addEventListener("click", async () => {
   }
 });
 
-$("#btn-logout").addEventListener("click", () => {
-  clearSession();
-  session = null;
-  showView("#view-login");
-  loadEmpleados();
-});
+// (logout перенесён в tab-logout, см. switchTab/logoutAll)
 
 // ── Pending view ────────────────────────────────────────────────────────────
 function showPending() {
@@ -541,6 +543,86 @@ function haversine(lat1, lng1, lat2, lng2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// ── Tabs ────────────────────────────────────────────────────────────────────
+function showTabs() {
+  $("#tabs").style.display = "flex";
+  $("#tab-admin").style.display = isAdmin ? "block" : "none";
+}
+function hideTabs() {
+  $("#tabs").style.display = "none";
+}
+function switchTab(name) {
+  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  if (name === "empleado") {
+    if (session) {
+      enterMain();
+    } else if (isAdmin) {
+      // admin без empleado-сессии — показать выбор/регистрацию
+      showView("#view-login");
+      $$(".login-tab").forEach(t => t.classList.toggle("active", t.dataset.login === "empleado"));
+      $("#login-empleado").style.display = "block";
+      $("#login-admin").style.display = "none";
+      hideTabs();
+    }
+  } else if (name === "admin") {
+    showView("#view-admin");
+    if (window.JETAdmin && window.JETAdmin.load) window.JETAdmin.load();
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  $$(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+  const tabLogout = $("#tab-logout");
+  if (tabLogout) tabLogout.addEventListener("click", logoutAll);
+
+  $$(".login-tab").forEach(t => t.addEventListener("click", () => {
+    $$(".login-tab").forEach(x => x.classList.toggle("active", x === t));
+    $("#login-empleado").style.display = t.dataset.login === "empleado" ? "block" : "none";
+    $("#login-admin").style.display    = t.dataset.login === "admin"    ? "block" : "none";
+  }));
+
+  const btnAdminLogin = $("#btn-admin-login");
+  if (btnAdminLogin) btnAdminLogin.addEventListener("click", adminLogin);
+  const adminPwd = $("#admin-password");
+  if (adminPwd) adminPwd.addEventListener("keydown", e => { if (e.key === "Enter") adminLogin(); });
+});
+
+async function adminLogin() {
+  const email = $("#admin-email").value.trim();
+  const password = $("#admin-password").value;
+  if (!email || !password) { toast("Email y contraseña requeridos", "error"); return; }
+  showOverlay("Verificando...");
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    const { data: adminRow } = await sb.from("admins").select("email").eq("email", email).maybeSingle();
+    if (!adminRow) {
+      await sb.auth.signOut();
+      throw new Error("Este usuario no es administrador");
+    }
+    isAdmin = true;
+    adminSession = { email };
+    $("#admin-email-display").textContent = email;
+    showTabs();
+    switchTab("admin");
+  } catch (e) {
+    toast(e.message || String(e), "error");
+  } finally {
+    hideOverlay();
+  }
+}
+
+async function logoutAll() {
+  clearSession();
+  session = null;
+  if (adminSession) await sb.auth.signOut();
+  adminSession = null;
+  isAdmin = false;
+  hideTabs();
+  showView("#view-login");
+  await loadEmpleados();
+}
+
 // ── Init ────────────────────────────────────────────────────────────────────
 (async function init() {
   if (!CFG.SUPABASE_URL || CFG.SUPABASE_URL.includes("PEGAR")) {
@@ -548,10 +630,27 @@ function haversine(lat1, lng1, lat2, lng2) {
     return;
   }
   await loadEmpleados();
+
+  // Restore admin session if exists
+  const { data: { session: authSess } } = await sb.auth.getSession();
+  if (authSess && authSess.user) {
+    const email = authSess.user.email;
+    const { data: adminRow } = await sb.from("admins").select("email").eq("email", email).maybeSingle();
+    if (adminRow) {
+      isAdmin = true;
+      adminSession = { email };
+      $("#admin-email-display").textContent = email;
+    }
+  }
+
   const saved = loadSession();
   if (saved && saved.id && saved.nombre) {
     session = saved;
+    showTabs();
     await checkActiveAndProceed();
+  } else if (isAdmin) {
+    showTabs();
+    switchTab("admin");
   } else {
     showView("#view-login");
   }

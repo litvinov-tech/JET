@@ -11,23 +11,48 @@
   <main class="container">
     <header class="brand">
       <h1>JET</h1>
-      <p class="tagline">Registro de Asistencia</p>
+      <p class="tagline">Banco de Tiempo</p>
     </header>
 
-    <!-- LOGIN -->
+    <!-- TABS (visible cuando hay sesión) -->
+    <nav id="tabs" class="tabs" style="display:none;">
+      <button class="tab active" data-tab="empleado">👤 Mi turno</button>
+      <button class="tab" data-tab="admin" id="tab-admin" style="display:none;">⚙️ Admin</button>
+      <button class="tab-logout" id="tab-logout">Salir</button>
+    </nav>
+
+    <!-- ───── LOGIN ───── -->
     <section id="view-login" class="view active">
-      <h2>Identifícate</h2>
-      <label class="field">
-        <span>Selecciona tu nombre</span>
-        <select id="select-empleado" required>
-          <option value="">— Cargando... —</option>
-        </select>
-      </label>
-      <button class="btn btn-primary" id="btn-continuar">Entrar</button>
-      <button class="btn btn-secondary" id="btn-go-register" style="margin-top:8px;">Soy nuevo, registrarme</button>
+      <div class="login-tabs">
+        <button class="login-tab active" data-login="empleado">Empleado</button>
+        <button class="login-tab" data-login="admin">Admin</button>
+      </div>
+
+      <div id="login-empleado">
+        <label class="field">
+          <span>Selecciona tu nombre</span>
+          <select id="select-empleado" required>
+            <option value="">— Cargando... —</option>
+          </select>
+        </label>
+        <button class="btn btn-primary" id="btn-continuar">Entrar</button>
+        <button class="btn btn-secondary" id="btn-go-register" style="margin-top:8px;">Soy nuevo, registrarme</button>
+      </div>
+
+      <div id="login-admin" style="display:none;">
+        <label class="field">
+          <span>Correo</span>
+          <input type="email" id="admin-email" placeholder="admin@ejemplo.com" autocomplete="email" />
+        </label>
+        <label class="field">
+          <span>Contraseña</span>
+          <input type="password" id="admin-password" placeholder="••••••••" autocomplete="current-password" />
+        </label>
+        <button class="btn btn-primary" id="btn-admin-login">Entrar como admin</button>
+      </div>
     </section>
 
-    <!-- REGISTER -->
+    <!-- ───── REGISTER ───── -->
     <section id="view-register" class="view">
       <h2>Registro</h2>
       <label class="field">
@@ -42,7 +67,7 @@
       <button class="btn btn-link" id="btn-back-login" style="margin-top:8px;">← Volver</button>
     </section>
 
-    <!-- PENDING APPROVAL -->
+    <!-- ───── PENDING APPROVAL ───── -->
     <section id="view-pending" class="view">
       <div class="pending-card">
         <div class="pending-icon">⏳</div>
@@ -55,14 +80,13 @@
       </div>
     </section>
 
-    <!-- MAIN -->
+    <!-- ───── EMPLEADO: TURNO ───── -->
     <section id="view-main" class="view">
       <div class="user-bar">
         <div>
           <strong id="display-empleado"></strong>
           <small id="display-status-park">—</small>
         </div>
-        <button class="btn-link" id="btn-logout">Cambiar</button>
       </div>
 
       <div id="map" class="map-box"></div>
@@ -79,7 +103,7 @@
       <button class="btn btn-link" id="btn-mis-horas" style="margin-top:14px;">📊 Ver mis horas trabajadas</button>
     </section>
 
-    <!-- MIS HORAS -->
+    <!-- ───── EMPLEADO: MIS HORAS ───── -->
     <section id="view-mishoras" class="view">
       <button class="btn btn-link" id="btn-back-main">← Volver</button>
       <h2 style="margin-top:8px;">Mis horas</h2>
@@ -90,6 +114,37 @@
       </div>
       <h3 style="font-size:14px;margin:16px 4px 8px;color:var(--jet-gray);text-transform:uppercase;">Historial</h3>
       <div id="history-list"></div>
+    </section>
+
+    <!-- ───── ADMIN ───── -->
+    <section id="view-admin" class="view">
+      <div class="user-bar">
+        <div>
+          <strong>Panel Admin</strong>
+          <small id="admin-email-display">—</small>
+        </div>
+        <button class="btn-link" id="btn-admin-refresh">↻ Actualizar</button>
+      </div>
+
+      <div class="card" id="admin-pending-card" style="display:none;">
+        <h3>Solicitudes pendientes <span class="badge badge-pending" id="admin-pending-count">0</span></h3>
+        <div id="admin-pending-list"></div>
+      </div>
+
+      <div class="card">
+        <h3>Hoy <span id="admin-today-date" class="badge"></span></h3>
+        <div id="admin-today-list"></div>
+      </div>
+
+      <div class="card">
+        <h3>Resumen semanal <small style="color:var(--jet-gray);font-weight:normal" id="admin-week-since"></small></h3>
+        <div id="admin-week-list"></div>
+      </div>
+
+      <div class="card">
+        <h3>Empleados activos <span class="badge" id="admin-active-count">0</span></h3>
+        <div id="admin-active-list"></div>
+      </div>
     </section>
 
     <!-- LOADING / TOAST -->
@@ -106,5 +161,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="js/config.js"></script>
   <script src="js/app.js"></script>
+  <script src="js/admin.js"></script>
 </body>
 </html>

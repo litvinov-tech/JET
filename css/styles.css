@@ -282,6 +282,111 @@ h2 {
 .history-row .hours { font-weight: 700; color: var(--jet-blue); font-variant-numeric: tabular-nums; }
 .history-row .partial { color: var(--jet-gray); font-style: italic; font-weight: 400; }
 
+/* Top tabs (after login) */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: white;
+  padding: 4px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  align-items: center;
+}
+.tab {
+  flex: 1;
+  padding: 10px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--jet-gray);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tab.active {
+  background: var(--jet-blue);
+  color: white;
+  box-shadow: 0 2px 6px rgba(0,91,255,0.25);
+}
+.tab-logout {
+  background: none;
+  border: none;
+  color: var(--jet-danger);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 8px 10px;
+  font-weight: 600;
+}
+
+/* Login tabs (employee/admin) */
+.login-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: var(--jet-light);
+  padding: 4px;
+  border-radius: 10px;
+}
+.login-tab {
+  flex: 1;
+  padding: 9px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--jet-gray);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.login-tab.active {
+  background: white;
+  color: var(--jet-dark);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+/* Admin badges and tables (moved from admin.html) */
+.badge {
+  background: var(--jet-blue);
+  color: white;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-pending { background: var(--jet-warn); color: #5a3e00; }
+.admin-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.admin-table th, .admin-table td {
+  text-align: left; padding: 8px 6px;
+  border-bottom: 1px solid #eee;
+  vertical-align: middle;
+}
+.admin-table th {
+  background: var(--jet-light);
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--jet-gray);
+  text-transform: uppercase;
+}
+.photo-link {
+  color: var(--jet-blue);
+  font-size: 12px;
+  text-decoration: none;
+  padding: 0 2px;
+}
+.approve-btn, .reject-btn {
+  border: none;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-right: 3px;
+}
+.approve-btn { background: var(--jet-success); color: white; }
+.reject-btn { background: #fde8e8; color: var(--jet-danger); }
+
 .pending-card {
   background: white;
   border-radius: var(--radius);
