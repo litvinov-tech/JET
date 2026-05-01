@@ -23,41 +23,33 @@
 
     <!-- ───── LOGIN ───── -->
     <section id="view-login" class="view active">
-      <div class="login-tabs">
-        <button class="login-tab active" data-login="empleado">Empleado</button>
-        <button class="login-tab" data-login="admin">Admin</button>
-      </div>
-
-      <div id="login-empleado">
-        <label class="field">
-          <span>Selecciona tu nombre</span>
-          <select id="select-empleado" required>
-            <option value="">— Cargando... —</option>
-          </select>
-        </label>
-        <button class="btn btn-primary" id="btn-continuar">Entrar</button>
-        <button class="btn btn-secondary" id="btn-go-register" style="margin-top:8px;">Soy nuevo, registrarme</button>
-      </div>
-
-      <div id="login-admin" style="display:none;">
-        <label class="field">
-          <span>Correo</span>
-          <input type="email" id="admin-email" placeholder="admin@ejemplo.com" autocomplete="email" />
-        </label>
-        <label class="field">
-          <span>Contraseña</span>
-          <input type="password" id="admin-password" placeholder="••••••••" autocomplete="current-password" />
-        </label>
-        <button class="btn btn-primary" id="btn-admin-login">Entrar como admin</button>
-      </div>
+      <h2>Iniciar sesión</h2>
+      <label class="field">
+        <span>Correo</span>
+        <input type="email" id="login-email" placeholder="tu@email.com" autocomplete="email" />
+      </label>
+      <label class="field">
+        <span>Contraseña</span>
+        <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" />
+      </label>
+      <button class="btn btn-primary" id="btn-login">Entrar</button>
+      <button class="btn btn-secondary" id="btn-go-register" style="margin-top:8px;">Crear cuenta nueva</button>
     </section>
 
     <!-- ───── REGISTER ───── -->
     <section id="view-register" class="view">
-      <h2>Registro</h2>
+      <h2>Crear cuenta</h2>
       <label class="field">
         <span>Nombre completo</span>
         <input type="text" id="reg-nombre" placeholder="Juan Pérez" autocomplete="name">
+      </label>
+      <label class="field">
+        <span>Correo</span>
+        <input type="email" id="reg-email" placeholder="tu@email.com" autocomplete="email">
+      </label>
+      <label class="field">
+        <span>Contraseña <small style="color:var(--jet-gray);font-weight:normal;">(mín. 6 caracteres)</small></span>
+        <input type="password" id="reg-password" placeholder="••••••••" autocomplete="new-password">
       </label>
       <label class="field">
         <span>Teléfono (opcional)</span>

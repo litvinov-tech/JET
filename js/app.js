@@ -6,15 +6,12 @@ const sb = window.supabase.createClient(
   window.JET_CONFIG.SUPABASE_KEY
 );
 const CFG = window.JET_CONFIG;
-const LS_KEY = "jet_user_v3";
 
 const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
 
 // ── State ───────────────────────────────────────────────────────────────────
-let session = null;       // { id, nombre } для empleado
-let adminSession = null;  // { email } для admin
-let isAdmin = false;
+let me = null;       // { auth_user_id, nombre, email, activo, isAdmin }
 let pendingAction = null;
 let currentGPS = null;
 let nearestPark = null;
@@ -22,14 +19,12 @@ let map = null;
 let userMarker = null;
 let parkMarkers = {};
 
-// Expose for admin.js
-window.JET = { sb, $, $$, CFG };
+window.JET = { sb, $, $$, CFG, getMe: () => me };
 
 // ── UI helpers ──────────────────────────────────────────────────────────────
 function showView(id) {
   $$(".view").forEach(v => v.classList.remove("active"));
   $(id).classList.add("active");
-  // Re-render Leaflet when entering main (size fix after hidden)
   if (id === "#view-main" && map) setTimeout(() => map.invalidateSize(), 50);
 }
 function showOverlay(t) { $("#overlay-text").textContent = t || "Procesando..."; $("#overlay").classList.remove("hidden"); }
@@ -45,131 +40,195 @@ function toast(msg, kind) {
 // ── Date / time helpers ─────────────────────────────────────────────────────
 function todayStr() { return new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE }); }
 function nowTime()  { return new Date().toLocaleTimeString("en-GB", { timeZone: CFG.TIMEZONE, hour12: false }); }
-function dateOffset(days) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
-}
+function dateOffset(days) { const d = new Date(); d.setDate(d.getDate() - days); return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE }); }
 function getMondayDate(weeksAgo) {
   const d = new Date();
-  const day = (d.getDay() + 6) % 7; // Mon=0...Sun=6
+  const day = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - day - 7 * (weeksAgo || 0));
   return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
 }
 
-// ── Login: load empleados from DB ───────────────────────────────────────────
-async function loadEmpleados() {
-  const sel = $("#select-empleado");
-  sel.innerHTML = "<option value=''>— Cargando... —</option>";
-  const { data, error } = await sb.from("empleados").select("id, nombre").eq("activo", true).order("nombre");
-  if (error) { toast("Error: " + error.message, "error"); return; }
-  sel.innerHTML = "<option value=''>— Selecciona —</option>";
-  data.forEach(e => {
-    const o = document.createElement("option");
-    o.value = JSON.stringify({ id: e.id, nombre: e.nombre });
-    o.textContent = e.nombre;
-    sel.appendChild(o);
-  });
+// ── Tabs ────────────────────────────────────────────────────────────────────
+function showTabs() {
+  $("#tabs").style.display = "flex";
+  $("#tab-admin").style.display = (me && me.isAdmin) ? "block" : "none";
+}
+function hideTabs() { $("#tabs").style.display = "none"; }
+function switchTab(name) {
+  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  if (name === "empleado") enterMain();
+  else if (name === "admin") {
+    showView("#view-admin");
+    if (window.JETAdmin) window.JETAdmin.load();
+  }
 }
 
-function saveSession(s) { localStorage.setItem(LS_KEY, JSON.stringify(s)); }
-function loadSession() {
-  try { return JSON.parse(localStorage.getItem(LS_KEY)); } catch { return null; }
-}
-function clearSession() { localStorage.removeItem(LS_KEY); }
+// ── Auth: Login ─────────────────────────────────────────────────────────────
+$("#btn-login").addEventListener("click", login);
+$("#login-password").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
 
-$("#btn-continuar").addEventListener("click", () => {
-  const v = $("#select-empleado").value;
-  if (!v) { toast("Selecciona tu nombre", "error"); return; }
-  session = JSON.parse(v);
-  saveSession(session);
-  showTabs();
-  checkActiveAndProceed();
-});
-
-$("#btn-go-register").addEventListener("click", () => {
-  showView("#view-register");
-});
-
-$("#btn-back-login").addEventListener("click", () => {
-  showView("#view-login");
-});
-
-// Pending view handlers
-document.addEventListener("DOMContentLoaded", () => {
-  const btnCheck = $("#btn-check-again");
-  const btnPLogout = $("#btn-pending-logout");
-  if (btnCheck) btnCheck.addEventListener("click", checkActiveAndProceed);
-  if (btnPLogout) btnPLogout.addEventListener("click", () => {
-    clearSession();
-    session = null;
-    showView("#view-login");
-    loadEmpleados();
-  });
-});
-
-$("#btn-register").addEventListener("click", async () => {
-  const nombre = $("#reg-nombre").value.trim();
-  const tel = $("#reg-telefono").value.trim() || null;
-  if (!nombre || nombre.length < 3) { toast("Ingresa tu nombre completo", "error"); return; }
-  showOverlay("Registrando...");
+async function login() {
+  const email = $("#login-email").value.trim();
+  const password = $("#login-password").value;
+  if (!email || !password) { toast("Email y contraseña requeridos", "error"); return; }
+  showOverlay("Verificando...");
   try {
-    const { data, error } = await sb.from("empleados").insert({ nombre, telefono: tel }).select("id, nombre, activo").single();
-    if (error) {
-      if (error.code === "23505") throw new Error("Ya existe un empleado con ese nombre");
-      throw error;
-    }
-    session = { id: data.id, nombre: data.nombre };
-    saveSession(session);
-    toast("Solicitud enviada. Espera aprobación.", "success");
-    showTabs();
-    showPending();
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    await loadMe();
   } catch (e) {
     toast(e.message || String(e), "error");
   } finally {
     hideOverlay();
   }
-});
+}
 
-// (logout перенесён в tab-logout, см. switchTab/logoutAll)
+// ── Auth: Registration ──────────────────────────────────────────────────────
+$("#btn-go-register").addEventListener("click", () => showView("#view-register"));
+$("#btn-back-login").addEventListener("click", () => showView("#view-login"));
+$("#btn-register").addEventListener("click", register);
+
+async function register() {
+  const nombre = $("#reg-nombre").value.trim();
+  const email = $("#reg-email").value.trim();
+  const password = $("#reg-password").value;
+  const tel = $("#reg-telefono").value.trim() || null;
+
+  if (!nombre || nombre.length < 3) { toast("Ingresa tu nombre completo", "error"); return; }
+  if (!email || !email.includes("@")) { toast("Correo inválido", "error"); return; }
+  if (!password || password.length < 6) { toast("Contraseña mínimo 6 caracteres", "error"); return; }
+
+  showOverlay("Creando cuenta...");
+  try {
+    // 1) Crear auth user
+    const { data: authData, error: authErr } = await sb.auth.signUp({
+      email, password,
+      options: { data: { nombre } },
+    });
+    if (authErr) throw authErr;
+    if (!authData.user) throw new Error("No se pudo crear el usuario");
+
+    // 2) Si email confirmation está activado, no hay sesión todavía → pedir login después
+    let session = authData.session;
+    if (!session) {
+      // Hacer login explícitamente
+      const { data: signIn, error: signInErr } = await sb.auth.signInWithPassword({ email, password });
+      if (signInErr) throw new Error("Cuenta creada pero login falló: " + signInErr.message);
+      session = signIn.session;
+    }
+
+    // 3) Insertar empleado record
+    const { error: empErr } = await sb.from("empleados").insert({
+      auth_user_id: authData.user.id,
+      nombre, email, telefono: tel,
+    });
+    if (empErr) {
+      if (empErr.code === "23505") throw new Error("Ya existe una cuenta con ese correo o nombre");
+      throw empErr;
+    }
+
+    toast("Cuenta creada. Espera aprobación del admin.", "success");
+    await loadMe();
+  } catch (e) {
+    toast(e.message || String(e), "error");
+  } finally {
+    hideOverlay();
+  }
+}
+
+// ── Load current user info ──────────────────────────────────────────────────
+async function loadMe() {
+  const { data: { session: authSess } } = await sb.auth.getSession();
+  if (!authSess || !authSess.user) {
+    me = null;
+    hideTabs();
+    showView("#view-login");
+    return;
+  }
+  const email = authSess.user.email;
+  const userId = authSess.user.id;
+
+  // Check admin
+  let isAdmin = false;
+  try {
+    const { data: a } = await sb.from("admins").select("email").eq("email", email).maybeSingle();
+    isAdmin = !!a;
+  } catch {}
+
+  // Load empleado record (optional — admin может не быть empleado)
+  let emp = null;
+  try {
+    const { data: e } = await sb.from("empleados").select("*").eq("auth_user_id", userId).maybeSingle();
+    emp = e;
+  } catch {}
+
+  me = {
+    auth_user_id: userId,
+    email,
+    nombre: emp ? emp.nombre : null,
+    activo: emp ? emp.activo : false,
+    isAdmin,
+    empleadoId: emp ? emp.id : null,
+  };
+
+  showTabs();
+
+  if (me.isAdmin && !emp) {
+    // Чистый админ без employee-записи — сразу в админку
+    switchTab("admin");
+    return;
+  }
+
+  if (!emp) {
+    // Залогинен но нет empleado — странное состояние, отправляем на регистрацию
+    toast("No hay datos de empleado. Completa el registro.", "error");
+    showView("#view-register");
+    return;
+  }
+
+  if (!me.activo) {
+    showPending();
+    return;
+  }
+
+  switchTab("empleado");
+}
 
 // ── Pending view ────────────────────────────────────────────────────────────
 function showPending() {
   showView("#view-pending");
-  $("#pending-name").textContent = session.nombre;
+  $("#pending-name").textContent = me.nombre || me.email;
 }
 
-async function checkActiveAndProceed() {
-  // Verifica si el empleado está aprobado (activo=true) antes de ir al main
-  try {
-    const { data, error } = await sb.from("empleados")
-      .select("id, nombre, activo")
-      .eq("id", session.id)
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) {
-      // Empleado eliminado del sistema
-      clearSession();
-      session = null;
-      toast("Tu cuenta fue eliminada. Regístrate de nuevo.", "error");
-      showView("#view-login");
-      await loadEmpleados();
-      return;
-    }
-    if (!data.activo) {
-      showPending();
-      return;
-    }
-    // Aprobado → entra al main
-    enterMain();
-  } catch (e) {
-    toast("Error verificando estado: " + e.message, "error");
-  }
+// ── Logout ──────────────────────────────────────────────────────────────────
+async function logoutAll() {
+  await sb.auth.signOut();
+  me = null;
+  hideTabs();
+  showView("#view-login");
+  $("#login-email").value = "";
+  $("#login-password").value = "";
 }
+
+// ── Tab handlers ────────────────────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
+  $$(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+  const tabLogout = $("#tab-logout");
+  if (tabLogout) tabLogout.addEventListener("click", logoutAll);
+  const btnCheck = $("#btn-check-again");
+  if (btnCheck) btnCheck.addEventListener("click", loadMe);
+  const btnPLogout = $("#btn-pending-logout");
+  if (btnPLogout) btnPLogout.addEventListener("click", logoutAll);
+  const btnMisHoras = $("#btn-mis-horas");
+  if (btnMisHoras) btnMisHoras.addEventListener("click", loadMisHoras);
+  const btnBackMain = $("#btn-back-main");
+  if (btnBackMain) btnBackMain.addEventListener("click", () => switchTab("empleado"));
+});
 
 // ── Main view ───────────────────────────────────────────────────────────────
 async function enterMain() {
-  $("#display-empleado").textContent = session.nombre;
+  if (!me || !me.activo) { showPending(); return; }
+  $("#display-empleado").textContent = me.nombre;
   $("#display-status-park").textContent = "Esperando GPS…";
   showView("#view-main");
   initMap();
@@ -181,19 +240,13 @@ function initMap() {
   if (map) return;
   map = L.map("map", { zoomControl: true, attributionControl: false }).setView([25.66, -100.38], 13);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
-  // Add park circles
   Object.entries(CFG.PARQUES).forEach(([name, p]) => {
     const circle = L.circle([p.lat, p.lng], {
-      radius: p.radius,
-      color: "#0057b8",
-      fillColor: "#2196f3",
-      fillOpacity: 0.20,
-      weight: 2,
+      radius: p.radius, color: "#005bff", fillColor: "#4d8eff", fillOpacity: 0.2, weight: 2,
     }).addTo(map);
     circle.bindTooltip(name, { permanent: false });
     parkMarkers[name] = circle;
   });
-  // Fit bounds to all parks
   const bounds = L.latLngBounds(Object.values(CFG.PARQUES).map(p => [p.lat, p.lng]));
   map.fitBounds(bounds, { padding: [30, 30] });
 }
@@ -215,7 +268,6 @@ function startGPSWatch() {
 
 function updateUserLocation(lat, lng) {
   currentGPS = { lat, lng };
-  // Find nearest park
   let nearest = null, minDist = Infinity;
   Object.entries(CFG.PARQUES).forEach(([name, p]) => {
     const d = haversine(lat, lng, p.lat, p.lng);
@@ -223,18 +275,14 @@ function updateUserLocation(lat, lng) {
   });
   nearestPark = nearest;
 
-  // Update user marker
   if (userMarker) userMarker.remove();
   userMarker = L.marker([lat, lng], {
     icon: L.divIcon({
       html: '<div style="background:#1976d2;border:3px solid white;border-radius:50%;width:18px;height:18px;box-shadow:0 0 0 2px #1976d2;"></div>',
-      iconSize: [18, 18],
-      iconAnchor: [9, 9],
-      className: "",
+      iconSize: [18, 18], iconAnchor: [9, 9], className: "",
     })
   }).addTo(map);
 
-  // Update status
   const ps = $("#park-status");
   if (nearest && nearest.distance <= nearest.park.radius) {
     ps.textContent = `✓ Estás en ${nearest.name}`;
@@ -252,12 +300,8 @@ function updateUserLocation(lat, lng) {
 
 async function refreshStatus() {
   try {
-    const { data, error } = await sb
-      .from("turnos")
-      .select("*")
-      .eq("empleado", session.nombre)
-      .eq("fecha", todayStr())
-      .maybeSingle();
+    const { data, error } = await sb.from("turnos")
+      .select("*").eq("empleado", me.nombre).eq("fecha", todayStr()).maybeSingle();
     if (error) throw error;
     renderStatus(buildStatus(data), data);
   } catch (e) {
@@ -268,10 +312,8 @@ async function refreshStatus() {
 function buildStatus(row) {
   if (!row) return { state: "idle" };
   const out = {
-    entrada:      row.entrada || "",
-    ini_descanso: row.ini_descanso || "",
-    fin_descanso: row.fin_descanso || "",
-    salida:       row.salida || "",
+    entrada: row.entrada || "", ini_descanso: row.ini_descanso || "",
+    fin_descanso: row.fin_descanso || "", salida: row.salida || "",
   };
   if (out.salida) out.state = "closed";
   else if (out.ini_descanso && !out.fin_descanso) out.state = "on_break";
@@ -282,10 +324,10 @@ function buildStatus(row) {
 
 function renderStatus(r, row) {
   const STATES = {
-    idle:     { icon: "⏸", text: "Sin turno activo hoy" },
-    working:  { icon: "🟢", text: "Trabajando" },
+    idle: { icon: "⏸", text: "Sin turno activo hoy" },
+    working: { icon: "🟢", text: "Trabajando" },
     on_break: { icon: "🍴", text: "En descanso" },
-    closed:   { icon: "✅", text: "Turno cerrado" },
+    closed: { icon: "✅", text: "Turno cerrado" },
   };
   const cur = STATES[r.state] || STATES.idle;
   $("#status-icon").textContent = cur.icon;
@@ -326,10 +368,7 @@ function renderStatus(r, row) {
 
 // ── Action: GPS check → camera → upload → DB ────────────────────────────────
 function triggerAction(action) {
-  if (!currentGPS) {
-    toast("Esperando ubicación... permite GPS", "error");
-    return;
-  }
+  if (!currentGPS) { toast("Esperando ubicación... permite GPS", "error"); return; }
   if (!nearestPark || nearestPark.distance > nearestPark.park.radius) {
     const dist = nearestPark ? Math.round(nearestPark.distance) : "?";
     const name = nearestPark ? nearestPark.name : "?";
@@ -364,7 +403,7 @@ $("#photo-input").addEventListener("change", async (e) => {
 });
 
 async function uploadPhoto(blob, action) {
-  const safeName = session.nombre.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeName = me.nombre.replace(/[^a-zA-Z0-9_-]/g, "_");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const path = `${todayStr()}/${safeName}_${action}_${stamp}.jpg`;
   const { error } = await sb.storage.from("fotos").upload(path, blob, {
@@ -381,19 +420,18 @@ async function commitEvent(action, photoUrl, coords, parkName) {
   const gps = coords.lat.toFixed(5) + "," + coords.lng.toFixed(5);
 
   const { data: existing, error: e0 } = await sb.from("turnos")
-    .select("*").eq("empleado", session.nombre).eq("fecha", fecha).maybeSingle();
+    .select("*").eq("empleado", me.nombre).eq("fecha", fecha).maybeSingle();
   if (e0) throw new Error(e0.message);
 
   if (action === "start_shift") {
     if (existing) throw new Error("Ya iniciaste turno hoy");
     const { error } = await sb.from("turnos").insert({
-      empleado: session.nombre, fecha, punto: parkName,
+      empleado: me.nombre, fecha, punto: parkName,
       entrada: time, foto_entrada: photoUrl, gps_entrada: gps,
     });
     if (error) throw new Error(error.message);
     return { message: "Turno iniciado a las " + time };
   }
-
   if (!existing) throw new Error("Inicia turno primero");
 
   if (action === "start_lunch") {
@@ -404,7 +442,6 @@ async function commitEvent(action, photoUrl, coords, parkName) {
     if (error) throw new Error(error.message);
     return { message: "Descanso a las " + time };
   }
-
   if (action === "end_lunch") {
     if (!existing.ini_descanso) throw new Error("No iniciaste descanso");
     if (existing.fin_descanso) throw new Error("Descanso ya cerrado");
@@ -414,7 +451,6 @@ async function commitEvent(action, photoUrl, coords, parkName) {
     if (error) throw new Error(error.message);
     return { message: "De vuelta al trabajo, " + time };
   }
-
   if (action === "end_shift") {
     if (existing.salida) throw new Error("Turno ya cerrado");
     const horas = computeHoras(existing.entrada, existing.ini_descanso, existing.fin_descanso, time);
@@ -429,9 +465,6 @@ async function commitEvent(action, photoUrl, coords, parkName) {
 }
 
 // ── Mis horas view ──────────────────────────────────────────────────────────
-$("#btn-mis-horas").addEventListener("click", () => loadMisHoras());
-$("#btn-back-main").addEventListener("click", () => showView("#view-main"));
-
 async function loadMisHoras() {
   showView("#view-mishoras");
   showOverlay("Cargando historial...");
@@ -439,9 +472,7 @@ async function loadMisHoras() {
     const since = dateOffset(14);
     const { data, error } = await sb.from("turnos")
       .select("fecha, punto, entrada, salida, horas_comida, horas_trab")
-      .eq("empleado", session.nombre)
-      .gte("fecha", since)
-      .order("fecha", { ascending: false });
+      .eq("empleado", me.nombre).gte("fecha", since).order("fecha", { ascending: false });
     if (error) throw error;
     renderMisHoras(data || []);
   } catch (e) {
@@ -452,8 +483,7 @@ async function loadMisHoras() {
 }
 
 function renderMisHoras(rows) {
-  // Compute totals per week
-  const monday  = getMondayDate(0);
+  const monday = getMondayDate(0);
   const monday1 = getMondayDate(1);
   let secWeek = 0, secWeekPrev = 0, sec14 = 0;
   rows.forEach(r => {
@@ -538,89 +568,8 @@ function haversine(lat1, lng1, lat2, lng2) {
   const toRad = d => d * Math.PI / 180;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
-}
-
-// ── Tabs ────────────────────────────────────────────────────────────────────
-function showTabs() {
-  $("#tabs").style.display = "flex";
-  $("#tab-admin").style.display = isAdmin ? "block" : "none";
-}
-function hideTabs() {
-  $("#tabs").style.display = "none";
-}
-function switchTab(name) {
-  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-  if (name === "empleado") {
-    if (session) {
-      enterMain();
-    } else if (isAdmin) {
-      // admin без empleado-сессии — показать выбор/регистрацию
-      showView("#view-login");
-      $$(".login-tab").forEach(t => t.classList.toggle("active", t.dataset.login === "empleado"));
-      $("#login-empleado").style.display = "block";
-      $("#login-admin").style.display = "none";
-      hideTabs();
-    }
-  } else if (name === "admin") {
-    showView("#view-admin");
-    if (window.JETAdmin && window.JETAdmin.load) window.JETAdmin.load();
-  }
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  $$(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab)));
-  const tabLogout = $("#tab-logout");
-  if (tabLogout) tabLogout.addEventListener("click", logoutAll);
-
-  $$(".login-tab").forEach(t => t.addEventListener("click", () => {
-    $$(".login-tab").forEach(x => x.classList.toggle("active", x === t));
-    $("#login-empleado").style.display = t.dataset.login === "empleado" ? "block" : "none";
-    $("#login-admin").style.display    = t.dataset.login === "admin"    ? "block" : "none";
-  }));
-
-  const btnAdminLogin = $("#btn-admin-login");
-  if (btnAdminLogin) btnAdminLogin.addEventListener("click", adminLogin);
-  const adminPwd = $("#admin-password");
-  if (adminPwd) adminPwd.addEventListener("keydown", e => { if (e.key === "Enter") adminLogin(); });
-});
-
-async function adminLogin() {
-  const email = $("#admin-email").value.trim();
-  const password = $("#admin-password").value;
-  if (!email || !password) { toast("Email y contraseña requeridos", "error"); return; }
-  showOverlay("Verificando...");
-  try {
-    const { error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    const { data: adminRow } = await sb.from("admins").select("email").eq("email", email).maybeSingle();
-    if (!adminRow) {
-      await sb.auth.signOut();
-      throw new Error("Este usuario no es administrador");
-    }
-    isAdmin = true;
-    adminSession = { email };
-    $("#admin-email-display").textContent = email;
-    showTabs();
-    switchTab("admin");
-  } catch (e) {
-    toast(e.message || String(e), "error");
-  } finally {
-    hideOverlay();
-  }
-}
-
-async function logoutAll() {
-  clearSession();
-  session = null;
-  if (adminSession) await sb.auth.signOut();
-  adminSession = null;
-  isAdmin = false;
-  hideTabs();
-  showView("#view-login");
-  await loadEmpleados();
 }
 
 // ── Init ────────────────────────────────────────────────────────────────────
@@ -629,29 +578,14 @@ async function logoutAll() {
     toast("Falta configurar SUPABASE_URL en js/config.js", "error");
     return;
   }
-  await loadEmpleados();
+  await loadMe();
+})();
 
-  // Restore admin session if exists
-  const { data: { session: authSess } } = await sb.auth.getSession();
-  if (authSess && authSess.user) {
-    const email = authSess.user.email;
-    const { data: adminRow } = await sb.from("admins").select("email").eq("email", email).maybeSingle();
-    if (adminRow) {
-      isAdmin = true;
-      adminSession = { email };
-      $("#admin-email-display").textContent = email;
-    }
-  }
-
-  const saved = loadSession();
-  if (saved && saved.id && saved.nombre) {
-    session = saved;
-    showTabs();
-    await checkActiveAndProceed();
-  } else if (isAdmin) {
-    showTabs();
-    switchTab("admin");
-  } else {
+// Reload UI when auth state changes (login from another tab, etc.)
+sb.auth.onAuthStateChange((event, sessionObj) => {
+  if (event === "SIGNED_OUT") {
+    me = null;
+    hideTabs();
     showView("#view-login");
   }
-})();
+});
