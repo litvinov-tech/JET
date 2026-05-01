@@ -254,19 +254,27 @@ async function enterMain() {
   await refreshActiveTurno();
 }
 
+// Bounding box de San Pedro Garza García (con margen)
+const SPGG_BBOX = { south: 25.570, north: 25.700, west: -100.470, east: -100.320 };
+function inSPGG(lat, lng) {
+  return lat >= SPGG_BBOX.south && lat <= SPGG_BBOX.north
+      && lng >= SPGG_BBOX.west && lng <= SPGG_BBOX.east;
+}
+
 function initMap() {
   if (map) return;
-  map = L.map("map", { zoomControl: true, attributionControl: false }).setView([25.66, -100.38], 13);
+  map = L.map("map", { zoomControl: true, attributionControl: false }).setView([25.6571, -100.3897], 13);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
   Object.entries(CFG.PARQUES).forEach(([name, p]) => {
-    const circle = L.circle([p.lat, p.lng], {
-      radius: p.radius, color: "#005bff", fillColor: "#4d8eff", fillOpacity: 0.2, weight: 2,
+    const marker = L.marker([p.lat, p.lng], {
+      icon: L.divIcon({
+        html: '<div style="background:#005bff;border:2px solid white;border-radius:50%;width:10px;height:10px;box-shadow:0 0 0 2px #005bff80;"></div>',
+        iconSize: [10, 10], iconAnchor: [5, 5], className: "",
+      })
     }).addTo(map);
-    circle.bindTooltip(name, { permanent: false });
-    parkMarkers[name] = circle;
+    marker.bindTooltip(name, { permanent: false });
+    parkMarkers[name] = marker;
   });
-  const bounds = L.latLngBounds(Object.values(CFG.PARQUES).map(p => [p.lat, p.lng]));
-  map.fitBounds(bounds, { padding: [30, 30] });
 }
 
 function startGPSWatch() {
@@ -305,24 +313,22 @@ function updateUserLocation(lat, lng, accuracy) {
   if (userMarker) userMarker.remove();
   userMarker = L.marker([lat, lng], {
     icon: L.divIcon({
-      html: '<div style="background:#1976d2;border:3px solid white;border-radius:50%;width:18px;height:18px;box-shadow:0 0 0 2px #1976d2;"></div>',
+      html: '<div style="background:#005bff;border:3px solid white;border-radius:50%;width:18px;height:18px;box-shadow:0 0 0 3px rgba(0,91,255,0.4);"></div>',
       iconSize: [18, 18], iconAnchor: [9, 9], className: "",
     })
   }).addTo(map);
+  map.setView([lat, lng], Math.max(map.getZoom(), 14));
 
   const ps = $("#park-status");
-  const accWarn = (accuracy && accuracy > 100) ? ` <small style="opacity:0.7">(precisión ±${Math.round(accuracy)}m)</small>` : "";
-  if (nearest && nearest.distance <= nearest.park.radius) {
-    ps.innerHTML = `✓ Estás en ${nearest.name}${accWarn}`;
+  const accWarn = (accuracy && accuracy > 100) ? ` <small style="opacity:0.7">±${Math.round(accuracy)}m</small>` : "";
+  if (inSPGG(lat, lng)) {
+    ps.innerHTML = `✓ Ubicación verificada · San Pedro Garza García${accWarn}`;
     ps.className = "park-status in-zone";
-    $("#display-status-park").textContent = nearest.name;
-  } else if (nearest) {
-    ps.innerHTML = `Estás a ${Math.round(nearest.distance)}m de ${nearest.name}.${accWarn}`;
-    ps.className = "park-status out-zone";
-    $("#display-status-park").textContent = `${Math.round(nearest.distance)}m de ${nearest.name}`;
+    $("#display-status-park").textContent = nearest ? nearest.name : "San Pedro Garza García";
   } else {
-    ps.textContent = "Sin puntos configurados";
-    ps.className = "park-status";
+    ps.innerHTML = `⚠ Estás fuera de San Pedro Garza García${accWarn}`;
+    ps.className = "park-status out-zone";
+    $("#display-status-park").textContent = "Fuera de SPGG";
   }
 }
 
@@ -343,30 +349,63 @@ async function refreshActiveTurno() {
 }
 
 function renderShift() {
-  const card = $("#status-card");
-  const icon = $("#status-icon");
-  const text = $("#status-text");
+  const heroLabel = $("#hero-label");
+  const heroSub = $("#hero-sub");
   const times = $("#status-times");
   const actions = $("#actions");
   const timerEl = $("#live-timer");
+  const clockBtn = $("#btn-clock-main");
+  const clockIcon = $("#clock-icon");
+  const clockLabel = $("#clock-label");
+  const dot = $("#emp-status-dot");
 
   times.innerHTML = "";
   actions.innerHTML = "";
 
+  // Update avatar initial
+  const avatar = $("#emp-avatar");
+  if (avatar && me && me.nombre) avatar.textContent = me.nombre.trim().charAt(0).toUpperCase();
+
   if (!activeTurno) {
-    icon.textContent = "⏸";
-    text.textContent = "Sin turno activo";
+    heroLabel.textContent = "SIN TURNO ACTIVO";
+    heroLabel.className = "hero-label";
+    heroSub.textContent = "Toca para registrar tu entrada";
     timerEl.textContent = "00:00:00";
-    timerEl.style.display = "none";
-    addActionButton(actions, "start_shift", "▶ Iniciar turno", "btn-primary");
+    timerEl.classList.remove("on-break", "active");
+    clockBtn.className = "btn-clock btn-clock-start";
+    clockIcon.textContent = "▶";
+    clockLabel.textContent = "Iniciar turno";
+    clockBtn.onclick = () => triggerAction("start_shift");
+    if (dot) dot.className = "emp-status-dot";
     return;
   }
 
   const onBreak = activeTurno.ini_descanso_at && !activeTurno.fin_descanso_at;
-  icon.textContent = onBreak ? "🍴" : "🟢";
-  text.textContent = (onBreak ? "En descanso" : "Trabajando") + ` · ${activeTurno.punto}`;
-  timerEl.style.display = "block";
+  if (onBreak) {
+    heroLabel.textContent = "EN DESCANSO";
+    heroLabel.className = "hero-label hero-label-break";
+    heroSub.textContent = activeTurno.punto || "";
+    timerEl.classList.add("on-break");
+    timerEl.classList.remove("active");
+    clockBtn.className = "btn-clock btn-clock-resume";
+    clockIcon.textContent = "↩";
+    clockLabel.textContent = "Volver al trabajo";
+    clockBtn.onclick = () => triggerAction("end_lunch");
+    if (dot) dot.className = "emp-status-dot dot-break";
+  } else {
+    heroLabel.textContent = "TRABAJANDO";
+    heroLabel.className = "hero-label hero-label-active";
+    heroSub.textContent = activeTurno.punto || "";
+    timerEl.classList.add("active");
+    timerEl.classList.remove("on-break");
+    clockBtn.className = "btn-clock btn-clock-stop";
+    clockIcon.textContent = "⏹";
+    clockLabel.textContent = "Cerrar turno";
+    clockBtn.onclick = () => triggerAction("end_shift");
+    if (dot) dot.className = "emp-status-dot dot-active";
+  }
 
+  // Inline timeline of timestamps
   const rows = [
     ["Entrada", fmtTimeShort(activeTurno.entrada_at)],
     ["Inicio descanso", fmtTimeShort(activeTurno.ini_descanso_at)],
@@ -381,11 +420,9 @@ function renderShift() {
     }
   });
 
-  if (onBreak) {
-    addActionButton(actions, "end_lunch", "↩ Volver al trabajo", "btn-primary");
-  } else {
+  // Secondary action: descanso button (только когда не на перерыве)
+  if (!onBreak) {
     addActionButton(actions, "start_lunch", "🍴 Iniciar descanso", "btn-secondary");
-    addActionButton(actions, "end_shift", "⏹ Cerrar turno", "btn-danger");
   }
 }
 
@@ -429,10 +466,8 @@ function stopTimer() {
 // ── Action: GPS check → photo → RPC ─────────────────────────────────────────
 function triggerAction(action) {
   if (!currentGPS) { toast("Esperando ubicación... permite GPS", "error"); return; }
-  if (!nearestPark || nearestPark.distance > nearestPark.park.radius) {
-    const dist = nearestPark ? Math.round(nearestPark.distance) : "?";
-    const name = nearestPark ? nearestPark.name : "?";
-    toast(`Acércate a ${name}. Estás a ${dist}m.`, "error");
+  if (!inSPGG(currentGPS.lat, currentGPS.lng)) {
+    toast("Estás fuera de San Pedro Garza García", "error");
     return;
   }
   if (currentGPS.accuracy && currentGPS.accuracy > 200) {

@@ -74,24 +74,28 @@
 
     <!-- ───── EMPLEADO: TURNO ───── -->
     <section id="view-main" class="view">
-      <div class="user-bar">
-        <div>
+      <div class="emp-header">
+        <div class="emp-avatar" id="emp-avatar">—</div>
+        <div class="emp-info">
           <strong id="display-empleado"></strong>
-          <small id="display-status-park">—</small>
+          <small id="display-status-park">Esperando GPS…</small>
         </div>
+        <div class="emp-status-dot" id="emp-status-dot"></div>
       </div>
+
+      <div class="hero">
+        <div class="hero-label" id="hero-label">SIN TURNO ACTIVO</div>
+        <div class="live-timer" id="live-timer">00:00:00</div>
+        <button class="btn-clock" id="btn-clock-main"><span id="clock-icon">▶</span><span id="clock-label">Iniciar turno</span></button>
+        <div class="hero-sub" id="hero-sub"></div>
+      </div>
+
+      <div class="actions actions-secondary" id="actions"></div>
+
+      <div class="status-times" id="status-times"></div>
 
       <div id="map" class="map-box"></div>
       <div id="park-status" class="park-status">Buscando ubicación…</div>
-
-      <div class="status-card" id="status-card">
-        <div class="status-icon" id="status-icon">⏸</div>
-        <div class="status-text" id="status-text">Cargando…</div>
-        <div class="live-timer" id="live-timer" style="display:none;">00:00:00</div>
-        <div class="status-times" id="status-times"></div>
-      </div>
-
-      <div class="actions" id="actions"></div>
 
       <div class="footer-actions">
         <button class="btn btn-link" id="btn-mis-horas">📊 Mis horas</button>
@@ -149,68 +153,112 @@
 
     <!-- ───── ADMIN ───── -->
     <section id="view-admin" class="view">
-      <div class="user-bar">
+      <div class="admin-header">
         <div>
-          <strong>Panel Admin</strong>
-          <small id="admin-email-display">—</small>
+          <h2 class="admin-title">Panel de control</h2>
+          <small id="admin-email-display" class="admin-subtitle">—</small>
         </div>
-        <button class="btn-link" id="btn-admin-refresh">↻ Actualizar</button>
+        <button class="admin-refresh" id="btn-admin-refresh"><span>↻</span> Actualizar</button>
       </div>
 
       <!-- KPI cards -->
-      <div class="kpi-grid">
-        <div class="kpi"><div class="kpi-label">Hoy trabajando</div><div class="kpi-value" id="kpi-today-working">—</div></div>
-        <div class="kpi"><div class="kpi-label">Total horas hoy</div><div class="kpi-value" id="kpi-today-hours">—</div></div>
-        <div class="kpi"><div class="kpi-label">Empleados activos</div><div class="kpi-value" id="kpi-active">—</div></div>
-        <div class="kpi"><div class="kpi-label">Pendientes</div><div class="kpi-value" id="kpi-pending">—</div></div>
-      </div>
-
-      <!-- Pending registrations -->
-      <div class="card" id="admin-pending-card" style="display:none;">
-        <h3>Nuevos registros <span class="badge badge-pending" id="admin-pending-count">0</span></h3>
-        <div id="admin-pending-list"></div>
-      </div>
-
-      <!-- Pending correction requests -->
-      <div class="card" id="admin-corrections-card" style="display:none;">
-        <h3>Solicitudes de corrección <span class="badge badge-pending" id="admin-corrections-count">0</span></h3>
-        <div id="admin-corrections-list"></div>
-      </div>
-
-      <!-- Period filter -->
-      <div class="card">
-        <h3>Reporte por período</h3>
-        <div class="period-tabs">
-          <button class="period-tab active" data-period="today">Hoy</button>
-          <button class="period-tab" data-period="week">Semana</button>
-          <button class="period-tab" data-period="month">Mes</button>
-          <button class="period-tab" data-period="custom">Custom</button>
+      <div class="kpi-grid kpi-grid-pro">
+        <div class="kpi kpi-accent-green">
+          <div class="kpi-icon">🟢</div>
+          <div><div class="kpi-label">Trabajando ahora</div><div class="kpi-value" id="kpi-today-working">—</div></div>
         </div>
-        <div class="period-custom" id="period-custom" style="display:none;">
-          <label class="field" style="flex:1;"><span>Desde</span><input type="date" id="period-from"></label>
-          <label class="field" style="flex:1;"><span>Hasta</span><input type="date" id="period-to"></label>
-          <button class="btn btn-primary" id="btn-period-apply" style="flex:0 0 auto;align-self:flex-end;height:46px;">Aplicar</button>
+        <div class="kpi kpi-accent-blue">
+          <div class="kpi-icon">⏱</div>
+          <div><div class="kpi-label">Horas hoy</div><div class="kpi-value" id="kpi-today-hours">—</div></div>
         </div>
-        <div class="period-summary" id="period-summary"></div>
-
-        <h4 class="subheader">Por empleado</h4>
-        <div id="period-by-emp"></div>
-
-        <button class="btn btn-secondary" id="btn-export-csv" style="margin-top:14px;">⬇ Descargar CSV</button>
+        <div class="kpi kpi-accent-purple">
+          <div class="kpi-icon">👥</div>
+          <div><div class="kpi-label">Empleados</div><div class="kpi-value" id="kpi-active">—</div></div>
+        </div>
+        <div class="kpi kpi-accent-amber">
+          <div class="kpi-icon">⚠</div>
+          <div><div class="kpi-label">Pendientes</div><div class="kpi-value" id="kpi-pending">—</div></div>
+        </div>
       </div>
 
-      <!-- Today details -->
-      <div class="card">
-        <h3>Detalle de hoy <span id="admin-today-date" class="badge"></span></h3>
-        <div id="admin-today-list"></div>
+      <!-- Live Working Board -->
+      <div class="card admin-card">
+        <h3 class="card-title">
+          <span class="dot-live"></span> En vivo · ahora trabajando
+          <span class="badge" id="live-count">0</span>
+        </h3>
+        <div id="live-board" class="live-board"></div>
       </div>
 
-      <!-- Active employees -->
-      <div class="card">
-        <h3>Empleados activos <span class="badge" id="admin-active-count">0</span></h3>
-        <div id="admin-active-list"></div>
+      <div class="admin-grid">
+        <div class="admin-col">
+          <!-- Hours chart -->
+          <div class="card admin-card">
+            <h3 class="card-title">Horas últimos 7 días</h3>
+            <div id="hours-chart" class="hours-chart"></div>
+          </div>
+
+          <!-- Top employees -->
+          <div class="card admin-card">
+            <h3 class="card-title">Top empleados (este período)</h3>
+            <div id="top-emp" class="top-emp-list"></div>
+          </div>
+
+          <!-- Pending registrations -->
+          <div class="card admin-card" id="admin-pending-card" style="display:none;">
+            <h3 class="card-title">Nuevos registros <span class="badge badge-pending" id="admin-pending-count">0</span></h3>
+            <div id="admin-pending-list"></div>
+          </div>
+
+          <!-- Pending correction requests -->
+          <div class="card admin-card" id="admin-corrections-card" style="display:none;">
+            <h3 class="card-title">Solicitudes de corrección <span class="badge badge-pending" id="admin-corrections-count">0</span></h3>
+            <div id="admin-corrections-list"></div>
+          </div>
+
+          <!-- Active employees -->
+          <div class="card admin-card">
+            <h3 class="card-title">Empleados activos <span class="badge" id="admin-active-count">0</span></h3>
+            <div id="admin-active-list"></div>
+          </div>
+        </div>
+
+        <div class="admin-col">
+          <!-- Period filter -->
+          <div class="card admin-card">
+            <h3 class="card-title">Reporte por período</h3>
+            <div class="period-tabs">
+              <button class="period-tab active" data-period="today">Hoy</button>
+              <button class="period-tab" data-period="week">Semana</button>
+              <button class="period-tab" data-period="month">Mes</button>
+              <button class="period-tab" data-period="custom">Custom</button>
+            </div>
+            <div class="period-custom" id="period-custom" style="display:none;">
+              <label class="field" style="flex:1;"><span>Desde</span><input type="date" id="period-from"></label>
+              <label class="field" style="flex:1;"><span>Hasta</span><input type="date" id="period-to"></label>
+              <button class="btn btn-primary" id="btn-period-apply" style="flex:0 0 auto;align-self:flex-end;height:46px;">Aplicar</button>
+            </div>
+            <div class="period-summary" id="period-summary"></div>
+            <h4 class="subheader">Por empleado</h4>
+            <div id="period-by-emp"></div>
+            <button class="btn btn-secondary" id="btn-export-csv" style="margin-top:14px;">⬇ Descargar CSV</button>
+          </div>
+
+          <!-- Today details -->
+          <div class="card admin-card">
+            <h3 class="card-title">Detalle de hoy <span id="admin-today-date" class="badge"></span></h3>
+            <div id="admin-today-list"></div>
+          </div>
+        </div>
       </div>
     </section>
+
+    <!-- Photo lightbox -->
+    <div id="photo-lightbox" class="photo-lightbox hidden">
+      <button class="lightbox-close" id="lightbox-close">✕</button>
+      <img id="lightbox-img" src="" alt="">
+      <div id="lightbox-caption" class="lightbox-caption"></div>
+    </div>
 
     <!-- LOADING / TOAST -->
     <div id="overlay" class="overlay hidden">

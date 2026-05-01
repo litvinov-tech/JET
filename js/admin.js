@@ -101,6 +101,8 @@
       renderCorrections();
       renderToday();
       renderActive();
+      renderLiveBoard();
+      await loadHoursChart();
 
       if (!cache.periodFrom) { cache.periodFrom = today; cache.periodTo = today; }
       await loadPeriod();
@@ -109,6 +111,164 @@
     } finally {
       hideOverlay();
     }
+  }
+
+  // ── Live Working Board ───────────────────────────────────────────────────
+  function renderLiveBoard() {
+    const board = $("#live-board");
+    if (!board) return;
+    const open = cache.turnosToday.filter(t => !t.salida_at);
+    $("#live-count").textContent = open.length;
+    board.innerHTML = "";
+    if (!open.length) {
+      board.innerHTML = "<div class='live-empty'>Nadie está trabajando ahora</div>";
+      return;
+    }
+    open.forEach(t => {
+      const empName = empMap[t.empleado_id] || `(emp #${t.empleado_id})`;
+      const initial = empName.trim().charAt(0).toUpperCase();
+      const onBreak = t.ini_descanso_at && !t.fin_descanso_at;
+      const startMs = new Date(t.entrada_at).getTime();
+      const photoPath = t.foto_entrada;
+      const card = document.createElement("div");
+      card.className = "live-card" + (onBreak ? " on-break" : "");
+      card.innerHTML = `
+        <div class="live-card-photo" data-path="${escapeHtml(photoPath || "")}" data-caption="${escapeHtml(empName + " · entrada " + fmtTimeShort(t.entrada_at))}">${initial}</div>
+        <div class="live-card-info">
+          <div class="live-card-name">${escapeHtml(empName)}</div>
+          <div class="live-card-park">${escapeHtml(t.punto || "—")} · entrada ${fmtTimeShort(t.entrada_at)}</div>
+          <div class="live-card-timer" data-start="${startMs}" data-break-start="${t.ini_descanso_at ? new Date(t.ini_descanso_at).getTime() : ""}" data-break-end="${t.fin_descanso_at ? new Date(t.fin_descanso_at).getTime() : ""}">—</div>
+        </div>`;
+      board.appendChild(card);
+    });
+    // Load thumbnails async (signed URLs)
+    board.querySelectorAll(".live-card-photo[data-path]").forEach(async el => {
+      const path = el.dataset.path;
+      if (!path) return;
+      const url = await getSignedUrl(path);
+      if (url) {
+        el.style.backgroundImage = `url("${url}")`;
+        el.textContent = "";
+        el.onclick = () => openPhotoLightbox(url, el.dataset.caption);
+      }
+    });
+    tickLiveTimers();
+  }
+
+  let liveTimerHandle = null;
+  function tickLiveTimers() {
+    if (liveTimerHandle) clearInterval(liveTimerHandle);
+    const update = () => {
+      const now = Date.now();
+      $$(".live-card-timer").forEach(el => {
+        const start = +el.dataset.start;
+        if (!start) return;
+        const breakStart = el.dataset.breakStart ? +el.dataset.breakStart : null;
+        const breakEnd = el.dataset.breakEnd ? +el.dataset.breakEnd : null;
+        let totalSecs = Math.max(0, Math.floor((now - start) / 1000));
+        let lunchSecs = 0;
+        if (breakStart) {
+          const end = breakEnd || now;
+          lunchSecs = Math.max(0, Math.floor((end - breakStart) / 1000));
+        }
+        const workSecs = totalSecs - lunchSecs;
+        const h = Math.floor(workSecs / 3600);
+        const m = Math.floor((workSecs % 3600) / 60);
+        const s = Math.floor(workSecs % 60);
+        el.textContent = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+      });
+    };
+    update();
+    liveTimerHandle = setInterval(update, 1000);
+  }
+
+  // ── Hours chart (last 7 days) ────────────────────────────────────────────
+  async function loadHoursChart() {
+    const fromIso = dateOffset(6) + "T00:00:00";
+    const toIso = todayStr() + "T23:59:59";
+    try {
+      const { data, error } = await sb.from("turnos")
+        .select("entrada_at, horas_trab_secs")
+        .gte("entrada_at", fromIso).lte("entrada_at", toIso);
+      if (error) throw error;
+      const byDay = {};
+      for (let i = 6; i >= 0; i--) byDay[dateOffset(i)] = 0;
+      (data || []).forEach(r => {
+        const d = fmtDateLocal(r.entrada_at);
+        if (d in byDay) byDay[d] += r.horas_trab_secs || 0;
+      });
+      renderHoursChart(byDay);
+    } catch (e) {
+      $("#hours-chart").innerHTML = "<div class='empty'>Error cargando gráfico</div>";
+    }
+  }
+
+  function renderHoursChart(byDay) {
+    const el = $("#hours-chart");
+    if (!el) return;
+    el.innerHTML = "";
+    const dates = Object.keys(byDay);
+    const maxSec = Math.max(...Object.values(byDay), 3600);
+    const today = todayStr();
+    dates.forEach(d => {
+      const secs = byDay[d];
+      const heightPct = Math.max(2, (secs / maxSec) * 100);
+      const dt = new Date(d + "T12:00:00");
+      const dow = dt.toLocaleDateString("es-MX", { weekday: "short" }).replace(".","");
+      const isToday = d === today;
+      const col = document.createElement("div");
+      col.className = "chart-col";
+      col.innerHTML = `
+        <div class="chart-bar" style="height:${heightPct}%;${isToday ? '' : 'background:linear-gradient(180deg,#a8c7ff,#5a8eff);'}">
+          ${secs > 0 ? `<span class="chart-bar-value">${fmtH(secs)}</span>` : ""}
+        </div>
+        <div class="chart-label${isToday ? ' is-today' : ''}">${dow}</div>`;
+      el.appendChild(col);
+    });
+  }
+
+  // ── Top employees ────────────────────────────────────────────────────────
+  function renderTopEmployees(empAgg) {
+    const el = $("#top-emp");
+    if (!el) return;
+    const sorted = Object.entries(empAgg)
+      .map(([name, t]) => ({ name, secs: t.segs }))
+      .filter(x => x.secs > 0)
+      .sort((a, b) => b.secs - a.secs)
+      .slice(0, 5);
+    el.innerHTML = "";
+    if (!sorted.length) {
+      el.innerHTML = "<div class='empty'>Sin datos</div>";
+      return;
+    }
+    const maxSec = sorted[0].secs;
+    sorted.forEach((x, i) => {
+      const pct = Math.max(5, (x.secs / maxSec) * 100);
+      const rankClass = i === 0 ? "r1" : i === 1 ? "r2" : i === 2 ? "r3" : "";
+      const row = document.createElement("div");
+      row.className = "top-emp-row";
+      row.innerHTML = `
+        <div class="top-emp-rank ${rankClass}">${i + 1}</div>
+        <div class="top-emp-name">${escapeHtml(x.name)}</div>
+        <div class="top-emp-bar-wrap"><div class="top-emp-bar" style="width:${pct}%"></div></div>
+        <div class="top-emp-hours">${fmtH(x.secs)}</div>`;
+      el.appendChild(row);
+    });
+  }
+
+  // ── Photo lightbox ───────────────────────────────────────────────────────
+  function openPhotoLightbox(url, caption) {
+    const lb = $("#photo-lightbox");
+    if (!lb) return;
+    $("#lightbox-img").src = url;
+    $("#lightbox-caption").textContent = caption || "";
+    lb.classList.remove("hidden");
+  }
+  function closePhotoLightbox() {
+    const lb = $("#photo-lightbox");
+    if (!lb) return;
+    lb.classList.add("hidden");
+    $("#lightbox-img").src = "";
   }
 
   async function loadPeriod() {
@@ -218,11 +378,17 @@
     const tb = document.createElement("tbody");
     cache.turnosToday.forEach(r => {
       const empName = empMap[r.empleado_id] || `(#${r.empleado_id})`;
-      const photoCells = ["foto_entrada","foto_ini_desc","foto_fin_desc","foto_salida"]
-        .map(k => r[k]).filter(Boolean);
-      const photosHtml = photoCells.map((p, i) =>
-        `<a class="photo-link" data-path="${escapeHtml(p)}" href="#" onclick="window.JETAdmin.openPhoto(this); return false;">${["▶","🍴","↩","⏹"][i]}</a>`
-      ).join(" ");
+      const photoSpec = [
+        ["foto_entrada", "▶", "Entrada"],
+        ["foto_ini_desc", "🍴", "Inicio descanso"],
+        ["foto_fin_desc", "↩", "Fin descanso"],
+        ["foto_salida", "⏹", "Salida"],
+      ];
+      const photosHtml = photoSpec
+        .filter(([k]) => r[k])
+        .map(([k, icon, label]) =>
+          `<a class="photo-link" data-path="${escapeHtml(r[k])}" data-caption="${escapeHtml(empName + " · " + label)}" href="#" onclick="window.JETAdmin.openPhoto(this); return false;">${icon}</a>`
+        ).join(" ");
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${r.horas_trab_secs ? fmtH(r.horas_trab_secs) : "—"}</td><td>${photosHtml}</td>`;
       tb.appendChild(tr);
@@ -285,6 +451,8 @@
     tb.appendChild(totalTr);
     tbl.appendChild(tb);
     byEmp.appendChild(tbl);
+
+    renderTopEmployees(empAgg);
   }
 
   // ── Render: Active employees ─────────────────────────────────────────────
@@ -352,9 +520,9 @@
   async function openPhoto(linkEl) {
     const path = linkEl.dataset.path;
     if (!path) return;
-    if (path.startsWith("http")) { window.open(path, "_blank"); return; } // legacy
+    if (path.startsWith("http")) { openPhotoLightbox(path, linkEl.dataset.caption || ""); return; }
     const url = await getSignedUrl(path);
-    if (url) window.open(url, "_blank");
+    if (url) openPhotoLightbox(url, linkEl.dataset.caption || "");
     else alert("No se pudo cargar la foto");
   }
 
@@ -402,6 +570,10 @@
     const exp = $("#btn-export-csv"); if (exp) exp.addEventListener("click", exportCSV);
     const fromIn = $("#period-from"); if (fromIn) fromIn.value = dateOffset(7);
     const toIn = $("#period-to"); if (toIn) toIn.value = todayStr();
+    const lbClose = $("#lightbox-close"); if (lbClose) lbClose.addEventListener("click", closePhotoLightbox);
+    const lb = $("#photo-lightbox");
+    if (lb) lb.addEventListener("click", e => { if (e.target === lb) closePhotoLightbox(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closePhotoLightbox(); });
   });
 
   window.JETAdmin = { load, openPhoto };
