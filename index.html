@@ -87,12 +87,16 @@
       <div class="status-card" id="status-card">
         <div class="status-icon" id="status-icon">⏸</div>
         <div class="status-text" id="status-text">Cargando…</div>
+        <div class="live-timer" id="live-timer" style="display:none;">00:00:00</div>
         <div class="status-times" id="status-times"></div>
       </div>
 
       <div class="actions" id="actions"></div>
 
-      <button class="btn btn-link" id="btn-mis-horas" style="margin-top:14px;">📊 Ver mis horas trabajadas</button>
+      <div class="footer-actions">
+        <button class="btn btn-link" id="btn-mis-horas">📊 Mis horas</button>
+        <button class="btn btn-link" id="btn-request-correction">✏️ Solicitar corrección</button>
+      </div>
     </section>
 
     <!-- ───── EMPLEADO: MIS HORAS ───── -->
@@ -106,6 +110,41 @@
       </div>
       <h3 style="font-size:14px;margin:16px 4px 8px;color:var(--jet-gray);text-transform:uppercase;">Historial</h3>
       <div id="history-list"></div>
+
+      <h3 style="font-size:14px;margin:18px 4px 8px;color:var(--jet-gray);text-transform:uppercase;">Mis solicitudes de corrección</h3>
+      <div id="correction-list"></div>
+    </section>
+
+    <!-- ───── CORRECTION REQUEST FORM ───── -->
+    <section id="view-correction" class="view">
+      <button class="btn btn-link" id="btn-corr-cancel">← Cancelar</button>
+      <h2 style="margin-top:8px;">Solicitar corrección</h2>
+      <p style="font-size:13px;color:var(--jet-gray);margin-bottom:14px;">
+        Si olvidaste marcar entrada/salida o el sistema falló, envía una solicitud al admin.
+      </p>
+      <label class="field">
+        <span>Fecha del turno</span>
+        <input type="date" id="corr-fecha">
+      </label>
+      <label class="field">
+        <span>¿Qué pasó?</span>
+        <select id="corr-tipo">
+          <option value="forgot_start">Olvidé marcar entrada</option>
+          <option value="forgot_end">Olvidé marcar salida</option>
+          <option value="forgot_lunch">Olvidé marcar descanso</option>
+          <option value="wrong_time">Hora marcada es incorrecta</option>
+          <option value="other">Otro motivo</option>
+        </select>
+      </label>
+      <label class="field" id="corr-time-row">
+        <span>Hora correcta (opcional, formato 24h)</span>
+        <input type="time" id="corr-time">
+      </label>
+      <label class="field">
+        <span>Explica al admin (mín. 5 caracteres)</span>
+        <textarea id="corr-motivo" rows="3" placeholder="Ej: Mi celular se descargó al llegar al parque a las 7:00..."></textarea>
+      </label>
+      <button class="btn btn-primary" id="btn-corr-submit">Enviar solicitud</button>
     </section>
 
     <!-- ───── ADMIN ───── -->
@@ -128,8 +167,14 @@
 
       <!-- Pending registrations -->
       <div class="card" id="admin-pending-card" style="display:none;">
-        <h3>Solicitudes pendientes <span class="badge badge-pending" id="admin-pending-count">0</span></h3>
+        <h3>Nuevos registros <span class="badge badge-pending" id="admin-pending-count">0</span></h3>
         <div id="admin-pending-list"></div>
+      </div>
+
+      <!-- Pending correction requests -->
+      <div class="card" id="admin-corrections-card" style="display:none;">
+        <h3>Solicitudes de corrección <span class="badge badge-pending" id="admin-corrections-count">0</span></h3>
+        <div id="admin-corrections-list"></div>
       </div>
 
       <!-- Period filter -->

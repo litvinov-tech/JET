@@ -11,15 +11,18 @@ const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
 
 // ── State ───────────────────────────────────────────────────────────────────
-let me = null;       // { auth_user_id, nombre, email, activo, isAdmin }
+let me = null;
 let pendingAction = null;
 let currentGPS = null;
 let nearestPark = null;
 let map = null;
 let userMarker = null;
 let parkMarkers = {};
+let activeTurno = null;     // current open shift {id, entrada_at, ini_descanso_at, ...}
+let timerHandle = null;     // setInterval id
+let signedUrlCache = {};    // path -> {url, exp}
 
-window.JET = { sb, $, $$, CFG, getMe: () => me };
+window.JET = { sb, $, $$, CFG, getMe: () => me, getSignedUrl };
 
 // ── UI helpers ──────────────────────────────────────────────────────────────
 function showView(id) {
@@ -37,15 +40,40 @@ function toast(msg, kind) {
   setTimeout(() => t.remove(), 3500);
 }
 
-// ── Date / time helpers ─────────────────────────────────────────────────────
-function todayStr() { return new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE }); }
-function nowTime()  { return new Date().toLocaleTimeString("en-GB", { timeZone: CFG.TIMEZONE, hour12: false }); }
-function dateOffset(days) { const d = new Date(); d.setDate(d.getDate() - days); return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE }); }
-function getMondayDate(weeksAgo) {
+// ── Time helpers (display only — server is source of truth) ─────────────────
+function fmtTimeLocal(isoStr) {
+  if (!isoStr) return "—";
+  return new Date(isoStr).toLocaleTimeString("en-GB", {
+    timeZone: CFG.TIMEZONE, hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit"
+  });
+}
+function fmtTimeShort(isoStr) {
+  if (!isoStr) return "—";
+  return new Date(isoStr).toLocaleTimeString("en-GB", {
+    timeZone: CFG.TIMEZONE, hour12: false, hour: "2-digit", minute: "2-digit"
+  });
+}
+function fmtDateLocal(isoStr) {
+  if (!isoStr) return "";
+  return new Date(isoStr).toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+}
+function dateOffset(days) {
   const d = new Date();
-  const day = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - day - 7 * (weeksAgo || 0));
-  return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+function fmtSecs(secs) {
+  if (!secs || secs < 0) return "00:00:00";
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+function fmtSecsHM(secs) {
+  if (!secs || secs < 0) return "0h 00m";
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return `${h}h ${String(m).padStart(2,"0")}m`;
 }
 
 // ── Tabs ────────────────────────────────────────────────────────────────────
@@ -100,30 +128,22 @@ async function register() {
 
   showOverlay("Creando cuenta...");
   try {
-    // 1) Crear auth user
-    const { data: authData, error: authErr } = await sb.auth.signUp({
-      email, password,
-      options: { data: { nombre } },
-    });
+    const { data: authData, error: authErr } = await sb.auth.signUp({ email, password });
     if (authErr) throw authErr;
-    if (!authData.user) throw new Error("No se pudo crear el usuario");
+    if (!authData.user) throw new Error("No se pudo crear usuario");
 
-    // 2) Si email confirmation está activado, no hay sesión todavía → pedir login después
     let session = authData.session;
     if (!session) {
-      // Hacer login explícitamente
       const { data: signIn, error: signInErr } = await sb.auth.signInWithPassword({ email, password });
       if (signInErr) throw new Error("Cuenta creada pero login falló: " + signInErr.message);
       session = signIn.session;
     }
 
-    // 3) Insertar empleado record
     const { error: empErr } = await sb.from("empleados").insert({
-      auth_user_id: authData.user.id,
-      nombre, email, telefono: tel,
+      auth_user_id: authData.user.id, nombre, email, telefono: tel,
     });
     if (empErr) {
-      if (empErr.code === "23505") throw new Error("Ya existe una cuenta con ese correo o nombre");
+      if (empErr.code === "23505") throw new Error("Ya existe una cuenta con ese correo");
       throw empErr;
     }
 
@@ -148,14 +168,12 @@ async function loadMe() {
   const email = authSess.user.email;
   const userId = authSess.user.id;
 
-  // Check admin
   let isAdmin = false;
   try {
     const { data: a } = await sb.from("admins").select("email").eq("email", email).maybeSingle();
     isAdmin = !!a;
   } catch {}
 
-  // Load empleado record (optional — admin может не быть empleado)
   let emp = null;
   try {
     const { data: e } = await sb.from("empleados").select("*").eq("auth_user_id", userId).maybeSingle();
@@ -163,54 +181,42 @@ async function loadMe() {
   } catch {}
 
   me = {
-    auth_user_id: userId,
-    email,
+    auth_user_id: userId, email,
     nombre: emp ? emp.nombre : null,
     activo: emp ? emp.activo : false,
     isAdmin,
     empleadoId: emp ? emp.id : null,
   };
-
   showTabs();
 
-  if (me.isAdmin && !emp) {
-    // Чистый админ без employee-записи — сразу в админку
-    switchTab("admin");
-    return;
-  }
+  if (me.isAdmin && !emp) { switchTab("admin"); return; }
 
   if (!emp) {
-    // Залогинен но нет empleado — странное состояние, отправляем на регистрацию
     toast("No hay datos de empleado. Completa el registro.", "error");
     showView("#view-register");
     return;
   }
 
-  if (!me.activo) {
-    showPending();
-    return;
-  }
-
+  if (!me.activo) { showPending(); return; }
   switchTab("empleado");
 }
 
-// ── Pending view ────────────────────────────────────────────────────────────
 function showPending() {
   showView("#view-pending");
   $("#pending-name").textContent = me.nombre || me.email;
 }
 
-// ── Logout ──────────────────────────────────────────────────────────────────
 async function logoutAll() {
+  stopTimer();
   await sb.auth.signOut();
   me = null;
+  activeTurno = null;
   hideTabs();
   showView("#view-login");
   $("#login-email").value = "";
   $("#login-password").value = "";
 }
 
-// ── Tab handlers ────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   $$(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab)));
   const tabLogout = $("#tab-logout");
@@ -223,6 +229,14 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnMisHoras) btnMisHoras.addEventListener("click", loadMisHoras);
   const btnBackMain = $("#btn-back-main");
   if (btnBackMain) btnBackMain.addEventListener("click", () => switchTab("empleado"));
+  const btnRequestCorr = $("#btn-request-correction");
+  if (btnRequestCorr) btnRequestCorr.addEventListener("click", openCorrectionForm);
+  const btnCorrCancel = $("#btn-corr-cancel");
+  if (btnCorrCancel) btnCorrCancel.addEventListener("click", () => switchTab("empleado"));
+  const btnCorrSubmit = $("#btn-corr-submit");
+  if (btnCorrSubmit) btnCorrSubmit.addEventListener("click", submitCorrection);
+  const corrTipo = $("#corr-tipo");
+  if (corrTipo) corrTipo.addEventListener("change", updateCorrectionFormFields);
 });
 
 // ── Main view ───────────────────────────────────────────────────────────────
@@ -233,7 +247,7 @@ async function enterMain() {
   showView("#view-main");
   initMap();
   startGPSWatch();
-  await refreshStatus();
+  await refreshActiveTurno();
 }
 
 function initMap() {
@@ -257,7 +271,7 @@ function startGPSWatch() {
     return;
   }
   navigator.geolocation.watchPosition(
-    pos => updateUserLocation(pos.coords.latitude, pos.coords.longitude),
+    pos => updateUserLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
     err => {
       $("#park-status").textContent = "Permite ubicación para continuar";
       $("#park-status").className = "park-status out-zone";
@@ -266,8 +280,17 @@ function startGPSWatch() {
   );
 }
 
-function updateUserLocation(lat, lng) {
-  currentGPS = { lat, lng };
+function haversine(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function updateUserLocation(lat, lng, accuracy) {
+  currentGPS = { lat, lng, accuracy };
   let nearest = null, minDist = Infinity;
   Object.entries(CFG.PARQUES).forEach(([name, p]) => {
     const d = haversine(lat, lng, p.lat, p.lng);
@@ -284,12 +307,13 @@ function updateUserLocation(lat, lng) {
   }).addTo(map);
 
   const ps = $("#park-status");
+  const accWarn = (accuracy && accuracy > 100) ? ` <small style="opacity:0.7">(precisión ±${Math.round(accuracy)}m)</small>` : "";
   if (nearest && nearest.distance <= nearest.park.radius) {
-    ps.textContent = `✓ Estás en ${nearest.name}`;
+    ps.innerHTML = `✓ Estás en ${nearest.name}${accWarn}`;
     ps.className = "park-status in-zone";
     $("#display-status-park").textContent = nearest.name;
   } else if (nearest) {
-    ps.textContent = `Estás a ${Math.round(nearest.distance)}m de ${nearest.name}. Acércate al punto.`;
+    ps.innerHTML = `Estás a ${Math.round(nearest.distance)}m de ${nearest.name}.${accWarn}`;
     ps.className = "park-status out-zone";
     $("#display-status-park").textContent = `${Math.round(nearest.distance)}m de ${nearest.name}`;
   } else {
@@ -298,47 +322,54 @@ function updateUserLocation(lat, lng) {
   }
 }
 
-async function refreshStatus() {
+// ── Active shift tracking + live timer ──────────────────────────────────────
+async function refreshActiveTurno() {
   try {
     const { data, error } = await sb.from("turnos")
-      .select("*").eq("empleado", me.nombre).eq("fecha", todayStr()).maybeSingle();
+      .select("*").eq("empleado_id", me.empleadoId).is("salida_at", null)
+      .order("entrada_at", { ascending: false }).limit(1).maybeSingle();
     if (error) throw error;
-    renderStatus(buildStatus(data), data);
+    activeTurno = data;
+    renderShift();
+    if (activeTurno) startTimer();
+    else stopTimer();
   } catch (e) {
     toast("Error: " + (e.message || e), "error");
   }
 }
 
-function buildStatus(row) {
-  if (!row) return { state: "idle" };
-  const out = {
-    entrada: row.entrada || "", ini_descanso: row.ini_descanso || "",
-    fin_descanso: row.fin_descanso || "", salida: row.salida || "",
-  };
-  if (out.salida) out.state = "closed";
-  else if (out.ini_descanso && !out.fin_descanso) out.state = "on_break";
-  else if (out.entrada) out.state = "working";
-  else out.state = "idle";
-  return out;
-}
-
-function renderStatus(r, row) {
-  const STATES = {
-    idle: { icon: "⏸", text: "Sin turno activo hoy" },
-    working: { icon: "🟢", text: "Trabajando" },
-    on_break: { icon: "🍴", text: "En descanso" },
-    closed: { icon: "✅", text: "Turno cerrado" },
-  };
-  const cur = STATES[r.state] || STATES.idle;
-  $("#status-icon").textContent = cur.icon;
-  $("#status-text").textContent = cur.text + (row && row.punto ? ` · ${row.punto}` : "");
-
+function renderShift() {
+  const card = $("#status-card");
+  const icon = $("#status-icon");
+  const text = $("#status-text");
   const times = $("#status-times");
+  const actions = $("#actions");
+  const timerEl = $("#live-timer");
+
   times.innerHTML = "";
-  [["Entrada", r.entrada], ["Inicio descanso", r.ini_descanso],
-   ["Fin descanso", r.fin_descanso], ["Salida", r.salida]
-  ].forEach(([label, val]) => {
-    if (val) {
+  actions.innerHTML = "";
+
+  if (!activeTurno) {
+    icon.textContent = "⏸";
+    text.textContent = "Sin turno activo";
+    timerEl.textContent = "00:00:00";
+    timerEl.style.display = "none";
+    addActionButton(actions, "start_shift", "▶ Iniciar turno", "btn-primary");
+    return;
+  }
+
+  const onBreak = activeTurno.ini_descanso_at && !activeTurno.fin_descanso_at;
+  icon.textContent = onBreak ? "🍴" : "🟢";
+  text.textContent = (onBreak ? "En descanso" : "Trabajando") + ` · ${activeTurno.punto}`;
+  timerEl.style.display = "block";
+
+  const rows = [
+    ["Entrada", fmtTimeShort(activeTurno.entrada_at)],
+    ["Inicio descanso", fmtTimeShort(activeTurno.ini_descanso_at)],
+    ["Fin descanso", fmtTimeShort(activeTurno.fin_descanso_at)],
+  ];
+  rows.forEach(([label, val]) => {
+    if (val !== "—") {
       const div = document.createElement("div");
       div.className = "row";
       div.innerHTML = `<span>${label}</span><span>${val}</span>`;
@@ -346,34 +377,62 @@ function renderStatus(r, row) {
     }
   });
 
-  const actions = $("#actions");
-  actions.innerHTML = "";
-  const buttons = {
-    idle:    [["start_shift", "▶ Iniciar turno", "btn-primary"]],
-    working: [
-      ["start_lunch", "🍴 Iniciar descanso", "btn-secondary"],
-      ["end_shift",   "⏹ Cerrar turno",      "btn-danger"],
-    ],
-    on_break:[["end_lunch", "↩ Volver al trabajo", "btn-primary"]],
-    closed:  [],
-  };
-  (buttons[r.state] || []).forEach(([action, label, klass]) => {
-    const b = document.createElement("button");
-    b.className = "btn " + klass;
-    b.textContent = label;
-    b.onclick = () => triggerAction(action);
-    actions.appendChild(b);
-  });
+  if (onBreak) {
+    addActionButton(actions, "end_lunch", "↩ Volver al trabajo", "btn-primary");
+  } else {
+    addActionButton(actions, "start_lunch", "🍴 Iniciar descanso", "btn-secondary");
+    addActionButton(actions, "end_shift", "⏹ Cerrar turno", "btn-danger");
+  }
 }
 
-// ── Action: GPS check → camera → upload → DB ────────────────────────────────
+function addActionButton(container, action, label, klass) {
+  const b = document.createElement("button");
+  b.className = "btn " + klass;
+  b.textContent = label;
+  b.onclick = () => triggerAction(action);
+  container.appendChild(b);
+}
+
+function startTimer() {
+  if (timerHandle) clearInterval(timerHandle);
+  const tick = () => {
+    if (!activeTurno) { stopTimer(); return; }
+    const now = Date.now();
+    const startMs = new Date(activeTurno.entrada_at).getTime();
+    let totalSecs = Math.max(0, Math.floor((now - startMs) / 1000));
+    let lunchSecs = 0;
+    if (activeTurno.ini_descanso_at) {
+      const lunchStart = new Date(activeTurno.ini_descanso_at).getTime();
+      const lunchEnd = activeTurno.fin_descanso_at ? new Date(activeTurno.fin_descanso_at).getTime() : now;
+      lunchSecs = Math.max(0, Math.floor((lunchEnd - lunchStart) / 1000));
+    }
+    const workSecs = totalSecs - lunchSecs;
+    $("#live-timer").textContent = fmtSecs(workSecs);
+    if (activeTurno.ini_descanso_at && !activeTurno.fin_descanso_at) {
+      $("#live-timer").classList.add("on-break");
+    } else {
+      $("#live-timer").classList.remove("on-break");
+    }
+  };
+  tick();
+  timerHandle = setInterval(tick, 1000);
+}
+
+function stopTimer() {
+  if (timerHandle) { clearInterval(timerHandle); timerHandle = null; }
+}
+
+// ── Action: GPS check → photo → RPC ─────────────────────────────────────────
 function triggerAction(action) {
   if (!currentGPS) { toast("Esperando ubicación... permite GPS", "error"); return; }
   if (!nearestPark || nearestPark.distance > nearestPark.park.radius) {
     const dist = nearestPark ? Math.round(nearestPark.distance) : "?";
     const name = nearestPark ? nearestPark.name : "?";
-    toast(`No estás en ningún punto. ${dist}m de ${name}`, "error");
+    toast(`Acércate a ${name}. Estás a ${dist}m.`, "error");
     return;
+  }
+  if (currentGPS.accuracy && currentGPS.accuracy > 200) {
+    if (!confirm(`Tu GPS tiene baja precisión (±${Math.round(currentGPS.accuracy)}m). ¿Continuar?`)) return;
   }
   pendingAction = action;
   $("#photo-input").value = "";
@@ -384,16 +443,18 @@ $("#photo-input").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   if (!currentGPS || !nearestPark) { toast("GPS perdido", "error"); return; }
+  if (!pendingAction) return;
 
   showOverlay("Comprimiendo foto...");
   try {
     const blob = await compressImageToBlob(file);
+    if (!blob) throw new Error("Error al comprimir foto");
     showOverlay("Subiendo foto...");
-    const photoUrl = await uploadPhoto(blob, pendingAction);
+    const photoPath = await uploadPhoto(blob, pendingAction);
     showOverlay("Registrando...");
-    const result = await commitEvent(pendingAction, photoUrl, currentGPS, nearestPark.name);
+    const result = await callRPC(pendingAction, photoPath, currentGPS, nearestPark.name);
     toast(result.message, "success");
-    await refreshStatus();
+    await refreshActiveTurno();
   } catch (err) {
     toast(err.message || String(err), "error");
   } finally {
@@ -405,76 +466,58 @@ $("#photo-input").addEventListener("change", async (e) => {
 async function uploadPhoto(blob, action) {
   const safeName = me.nombre.replace(/[^a-zA-Z0-9_-]/g, "_");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const path = `${todayStr()}/${safeName}_${action}_${stamp}.jpg`;
+  const path = `${dateOffset(0)}/${safeName}_${action}_${stamp}.jpg`;
   const { error } = await sb.storage.from("fotos").upload(path, blob, {
     contentType: "image/jpeg", upsert: false,
   });
   if (error) throw new Error("Error subiendo foto: " + error.message);
-  const { data } = sb.storage.from("fotos").getPublicUrl(path);
-  return data.publicUrl;
+  return path;
 }
 
-async function commitEvent(action, photoUrl, coords, parkName) {
-  const time = nowTime();
-  const fecha = todayStr();
-  const gps = coords.lat.toFixed(5) + "," + coords.lng.toFixed(5);
-
-  const { data: existing, error: e0 } = await sb.from("turnos")
-    .select("*").eq("empleado", me.nombre).eq("fecha", fecha).maybeSingle();
-  if (e0) throw new Error(e0.message);
-
+async function callRPC(action, photoPath, coords, parkName) {
+  let rpcName, args;
   if (action === "start_shift") {
-    if (existing) throw new Error("Ya iniciaste turno hoy");
-    const { error } = await sb.from("turnos").insert({
-      empleado: me.nombre, fecha, punto: parkName,
-      entrada: time, foto_entrada: photoUrl, gps_entrada: gps,
-    });
-    if (error) throw new Error(error.message);
-    return { message: "Turno iniciado a las " + time };
+    rpcName = "start_shift";
+    args = { p_punto: parkName, p_foto_url: photoPath, p_lat: coords.lat, p_lng: coords.lng };
+  } else if (action === "start_lunch") {
+    rpcName = "start_lunch"; args = { p_foto_url: photoPath };
+  } else if (action === "end_lunch") {
+    rpcName = "end_lunch"; args = { p_foto_url: photoPath };
+  } else if (action === "end_shift") {
+    rpcName = "end_shift";
+    args = { p_foto_url: photoPath, p_lat: coords.lat, p_lng: coords.lng };
   }
-  if (!existing) throw new Error("Inicia turno primero");
-
-  if (action === "start_lunch") {
-    if (existing.ini_descanso) throw new Error("Descanso ya iniciado");
-    const { error } = await sb.from("turnos").update({
-      ini_descanso: time, foto_ini_desc: photoUrl,
-    }).eq("id", existing.id);
-    if (error) throw new Error(error.message);
-    return { message: "Descanso a las " + time };
-  }
-  if (action === "end_lunch") {
-    if (!existing.ini_descanso) throw new Error("No iniciaste descanso");
-    if (existing.fin_descanso) throw new Error("Descanso ya cerrado");
-    const { error } = await sb.from("turnos").update({
-      fin_descanso: time, foto_fin_desc: photoUrl,
-    }).eq("id", existing.id);
-    if (error) throw new Error(error.message);
-    return { message: "De vuelta al trabajo, " + time };
-  }
-  if (action === "end_shift") {
-    if (existing.salida) throw new Error("Turno ya cerrado");
-    const horas = computeHoras(existing.entrada, existing.ini_descanso, existing.fin_descanso, time);
-    const { error } = await sb.from("turnos").update({
-      salida: time, foto_salida: photoUrl, gps_salida: gps,
-      horas_comida: horas.comida, horas_trab: horas.trabajadas,
-    }).eq("id", existing.id);
-    if (error) throw new Error(error.message);
-    return { message: `Turno cerrado, ${time}. Trabajaste ${horas.trabajadas}` };
-  }
-  throw new Error("Acción desconocida");
+  const { data, error } = await sb.rpc(rpcName, args);
+  if (error) throw new Error(error.message);
+  if (!data || !data.ok) throw new Error("Operación falló");
+  let msg = "OK";
+  if (action === "start_shift") msg = "Turno iniciado";
+  else if (action === "start_lunch") msg = "Descanso iniciado";
+  else if (action === "end_lunch") msg = "De vuelta al trabajo";
+  else if (action === "end_shift") msg = `Turno cerrado: ${fmtSecsHM(data.work_secs)} trabajadas`;
+  return { message: msg };
 }
 
-// ── Mis horas view ──────────────────────────────────────────────────────────
+// ── Mis horas ───────────────────────────────────────────────────────────────
 async function loadMisHoras() {
   showView("#view-mishoras");
   showOverlay("Cargando historial...");
   try {
-    const since = dateOffset(14);
+    const sinceDate = dateOffset(14);
     const { data, error } = await sb.from("turnos")
-      .select("fecha, punto, entrada, salida, horas_comida, horas_trab")
-      .eq("empleado", me.nombre).gte("fecha", since).order("fecha", { ascending: false });
+      .select("id, punto, entrada_at, ini_descanso_at, fin_descanso_at, salida_at, horas_comida_secs, horas_trab_secs, source")
+      .eq("empleado_id", me.empleadoId)
+      .gte("entrada_at", sinceDate + "T00:00:00")
+      .order("entrada_at", { ascending: false });
     if (error) throw error;
-    renderMisHoras(data || []);
+
+    // Carga también solicitudes correcciones del usuario
+    const { data: corr } = await sb.from("correction_requests")
+      .select("id, fecha, tipo, status, motivo, admin_note, created_at")
+      .eq("empleado_id", me.empleadoId)
+      .order("created_at", { ascending: false }).limit(20);
+
+    renderMisHoras(data || [], corr || []);
   } catch (e) {
     toast(e.message, "error");
   } finally {
@@ -482,61 +525,138 @@ async function loadMisHoras() {
   }
 }
 
-function renderMisHoras(rows) {
-  const monday = getMondayDate(0);
-  const monday1 = getMondayDate(1);
+function renderMisHoras(turnos, corrections) {
+  const monday = mondayOffset(0);
+  const monday1 = mondayOffset(1);
   let secWeek = 0, secWeekPrev = 0, sec14 = 0;
-  rows.forEach(r => {
-    const sec = parseHHMM(r.horas_trab);
+  turnos.forEach(r => {
+    const sec = r.horas_trab_secs || 0;
     sec14 += sec;
-    if (r.fecha >= monday) secWeek += sec;
-    else if (r.fecha >= monday1) secWeekPrev += sec;
+    const d = fmtDateLocal(r.entrada_at);
+    if (d >= monday) secWeek += sec;
+    else if (d >= monday1) secWeekPrev += sec;
   });
-  $("#hrs-week").textContent      = fmtHHMM(secWeek);
-  $("#hrs-week-prev").textContent = fmtHHMM(secWeekPrev);
-  $("#hrs-14d").textContent       = fmtHHMM(sec14);
+  $("#hrs-week").textContent      = fmtSecsHM(secWeek);
+  $("#hrs-week-prev").textContent = fmtSecsHM(secWeekPrev);
+  $("#hrs-14d").textContent       = fmtSecsHM(sec14);
 
   const list = $("#history-list");
   list.innerHTML = "";
-  if (!rows.length) {
+  if (!turnos.length) {
     list.innerHTML = "<div class='park-status' style='margin:0;'>No hay registros aún</div>";
-    return;
+  } else {
+    turnos.forEach(r => {
+      const div = document.createElement("div");
+      div.className = "history-row";
+      const date = fmtDateLocal(r.entrada_at);
+      const inT = fmtTimeShort(r.entrada_at);
+      const outT = r.salida_at ? fmtTimeShort(r.salida_at) : "abierto";
+      const hrs = r.horas_trab_secs ? fmtSecsHM(r.horas_trab_secs) : (r.salida_at ? "—" : "en curso");
+      const corrFlag = r.source === "manual_correction" ? " <span class='badge' style='background:var(--jet-warn);color:#5a3e00;font-size:9px;'>EDITADO</span>" : "";
+      div.innerHTML = `
+        <div>
+          <div class="date">${date}${corrFlag}</div>
+          <span class="punto">${r.punto || "—"} · ${inT} → ${outT}</span>
+        </div>
+        <div class="hours">${hrs}</div>`;
+      list.appendChild(div);
+    });
   }
-  rows.forEach(r => {
-    const div = document.createElement("div");
-    div.className = "history-row";
-    const partial = !r.horas_trab;
-    div.innerHTML = `
-      <div>
-        <div class="date">${r.fecha}</div>
-        <span class="punto">${r.punto || "—"}</span>
-      </div>
-      <div class="hours ${partial ? 'partial' : ''}">
-        ${r.horas_trab || (r.entrada ? `desde ${r.entrada}` : "—")}
-      </div>`;
-    list.appendChild(div);
-  });
+
+  // Render correction requests
+  const corrList = $("#correction-list");
+  if (corrList) {
+    corrList.innerHTML = "";
+    if (!corrections.length) {
+      corrList.innerHTML = "<div class='park-status' style='margin:0;font-size:12px;'>Sin solicitudes</div>";
+    } else {
+      corrections.forEach(c => {
+        const div = document.createElement("div");
+        div.className = "history-row";
+        const colorMap = { pending: "var(--jet-warn)", approved: "var(--jet-success)", rejected: "var(--jet-danger)" };
+        const labelMap = { pending: "Pendiente", approved: "Aprobada", rejected: "Rechazada" };
+        const tipoMap = { forgot_start:"Olvidé entrar", forgot_end:"Olvidé salir", forgot_lunch:"Olvidé descanso", wrong_time:"Hora incorrecta", other:"Otro" };
+        div.innerHTML = `
+          <div>
+            <div class="date">${c.fecha} · ${tipoMap[c.tipo] || c.tipo}</div>
+            <span class="punto">${c.motivo}${c.admin_note ? " · " + c.admin_note : ""}</span>
+          </div>
+          <div class="hours" style="background:${colorMap[c.status]};color:white;padding:3px 10px;border-radius:10px;font-size:11px;">${labelMap[c.status]}</div>`;
+        corrList.appendChild(div);
+      });
+    }
+  }
 }
 
-// ── Time math ──────────────────────────────────────────────────────────────
-function parseHHMM(s) {
-  if (!s) return 0;
-  const p = String(s).split(":").map(Number);
-  return (p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0);
-}
-function fmtHHMM(secs) {
-  if (secs <= 0) return "00:00";
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
-}
-function computeHoras(entrada, iniDesc, finDesc, salida) {
-  const total = parseHHMM(salida) - parseHHMM(entrada);
-  let comida = 0;
-  if (iniDesc && finDesc) comida = parseHHMM(finDesc) - parseHHMM(iniDesc);
-  return { comida: fmtHHMM(comida), trabajadas: fmtHHMM(total - comida) };
+function mondayOffset(weeksAgo) {
+  const d = new Date();
+  const day = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - day - 7 * (weeksAgo || 0));
+  return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
 }
 
+// ── Correction request form ─────────────────────────────────────────────────
+function openCorrectionForm() {
+  showView("#view-correction");
+  $("#corr-fecha").value = dateOffset(0);
+  $("#corr-tipo").value = "forgot_start";
+  $("#corr-motivo").value = "";
+  $("#corr-time").value = "";
+  updateCorrectionFormFields();
+}
+
+function updateCorrectionFormFields() {
+  const tipo = $("#corr-tipo").value;
+  const showTime = ["forgot_start", "forgot_end", "forgot_lunch", "wrong_time"].includes(tipo);
+  $("#corr-time-row").style.display = showTime ? "block" : "none";
+}
+
+async function submitCorrection() {
+  const fecha = $("#corr-fecha").value;
+  const tipo = $("#corr-tipo").value;
+  const motivo = $("#corr-motivo").value.trim();
+  const timeStr = $("#corr-time").value;
+
+  if (!fecha) { toast("Selecciona la fecha", "error"); return; }
+  if (motivo.length < 5) { toast("Explica al menos en 5 caracteres", "error"); return; }
+
+  const tipoToField = {
+    forgot_start: "entrada_at",
+    forgot_end: "salida_at",
+    forgot_lunch: "ini_descanso_at",
+    wrong_time: "entrada_at",
+  };
+  const fieldName = tipoToField[tipo] || null;
+
+  let proposed = null;
+  if (timeStr && fieldName) {
+    proposed = new Date(`${fecha}T${timeStr}:00`).toISOString();
+  }
+
+  showOverlay("Enviando solicitud...");
+  try {
+    // Find turno_id for that fecha if any
+    const { data: t } = await sb.from("turnos")
+      .select("id").eq("empleado_id", me.empleadoId)
+      .gte("entrada_at", fecha + "T00:00:00").lt("entrada_at", fecha + "T23:59:59")
+      .limit(1).maybeSingle();
+    const turnoId = t ? t.id : null;
+
+    const { data, error } = await sb.rpc("request_correction", {
+      p_turno_id: turnoId, p_fecha: fecha, p_tipo: tipo,
+      p_field_name: fieldName, p_proposed_time: proposed, p_motivo: motivo,
+    });
+    if (error) throw new Error(error.message);
+    toast("Solicitud enviada al admin", "success");
+    switchTab("empleado");
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    hideOverlay();
+  }
+}
+
+// ── Image compression ───────────────────────────────────────────────────────
 function compressImageToBlob(file, maxDim = 800, quality = 0.7) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -553,9 +673,9 @@ function compressImageToBlob(file, maxDim = 800, quality = 0.7) {
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-        canvas.toBlob(b => b ? resolve(b) : reject(new Error("Error comprimiendo")), "image/jpeg", quality);
+        canvas.toBlob(b => b ? resolve(b) : reject(new Error("Error comprimiendo (memoria)")), "image/jpeg", quality);
       };
-      img.onerror = () => reject(new Error("No se pudo leer la imagen"));
+      img.onerror = () => reject(new Error("No se pudo leer imagen"));
       img.src = e.target.result;
     };
     reader.onerror = () => reject(new Error("Error leyendo archivo"));
@@ -563,13 +683,19 @@ function compressImageToBlob(file, maxDim = 800, quality = 0.7) {
   });
 }
 
-function haversine(lat1, lng1, lat2, lng2) {
-  const R = 6371000;
-  const toRad = d => d * Math.PI / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
+// ── Signed URL для отображения фото в админке (private bucket) ──────────────
+async function getSignedUrl(path) {
+  if (!path) return null;
+  const cached = signedUrlCache[path];
+  if (cached && cached.exp > Date.now()) return cached.url;
+  try {
+    const { data, error } = await sb.storage.from("fotos").createSignedUrl(path, 3600);
+    if (error) throw error;
+    signedUrlCache[path] = { url: data.signedUrl, exp: Date.now() + 3500 * 1000 };
+    return data.signedUrl;
+  } catch {
+    return null;
+  }
 }
 
 // ── Init ────────────────────────────────────────────────────────────────────
@@ -581,11 +707,9 @@ function haversine(lat1, lng1, lat2, lng2) {
   await loadMe();
 })();
 
-// Reload UI when auth state changes (login from another tab, etc.)
-sb.auth.onAuthStateChange((event, sessionObj) => {
+sb.auth.onAuthStateChange((event) => {
   if (event === "SIGNED_OUT") {
-    me = null;
-    hideTabs();
-    showView("#view-login");
+    me = null; activeTurno = null; stopTimer();
+    hideTabs(); showView("#view-login");
   }
 });
