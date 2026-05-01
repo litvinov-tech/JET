@@ -1092,3 +1092,14 @@ h2 {
 .admin-row:last-child { border-bottom: none; }
 .admin-row .admin-email { font-weight: 600; color: var(--jet-dark); word-break: break-all; }
 .admin-row .admin-self { font-size: 10px; color: var(--jet-success); font-weight: 700; margin-left: 6px; }
+.admin-row .admin-super {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 800;
+  color: #5a3e00;
+  background: linear-gradient(135deg, #ffd700, #ffa500);
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-left: 6px;
+  letter-spacing: 0.4px;
+}

@@ -87,7 +87,7 @@
         sb.from("empleados").select("id, nombre, email, telefono").eq("activo", true).order("nombre"),
         sb.from("turnos").select("*").gte("entrada_at", today + "T00:00:00").order("entrada_at", { ascending: true }),
         sb.from("correction_requests").select("*").eq("status", "pending").order("created_at", { ascending: true }),
-        sb.from("admins").select("email, created_at").order("created_at", { ascending: true }),
+        sb.from("admins").select("email, super, created_at").order("created_at", { ascending: true }),
       ]);
 
       cache.pending = pendingRes.data || [];
@@ -470,13 +470,21 @@
       list.innerHTML = "<div class='empty'>Sin empleados aprobados</div>";
       return;
     }
-    const adminEmails = new Set(cache.admins.map(a => a.email));
+    const adminMap = {};
+    cache.admins.forEach(a => adminMap[a.email] = a);
     cache.empleados.forEach(e => {
       const div = document.createElement("div");
       div.className = "week-row";
-      const isAdmin = adminEmails.has(e.email);
-      const adminBadge = isAdmin ? ` <span class="badge" style="background:#fff3cd;color:#6a4a00;">ADMIN</span>` : "";
+      const adm = adminMap[e.email];
+      const isAdmin = !!adm;
+      const isSuper = adm && adm.super;
+      const adminBadge = isSuper
+        ? ` <span class="badge" style="background:#ffe4a7;color:#5a3e00;">⭐ SUPER</span>`
+        : isAdmin
+          ? ` <span class="badge" style="background:#fff3cd;color:#6a4a00;">ADMIN</span>`
+          : "";
       const promoteBtn = isAdmin ? "" : `<button class="btn-mini btn-mini-promote" data-action="promote" data-email="${escapeHtml(e.email)}" data-name="${escapeHtml(e.nombre)}" title="Hacer admin">👑</button>`;
+      const deleteBtn = isSuper ? "" : `<button class="btn-mini btn-mini-delete" data-action="delete-emp" data-id="${e.id}" data-name="${escapeHtml(e.nombre)}" title="Eliminar">🗑</button>`;
       div.innerHTML = `
         <span style="min-width:0;flex:1;">
           <strong>${escapeHtml(e.nombre)}</strong>${adminBadge}<br>
@@ -484,7 +492,7 @@
         </span>
         <div class="emp-actions">
           ${promoteBtn}
-          <button class="btn-mini btn-mini-delete" data-action="delete-emp" data-id="${e.id}" data-name="${escapeHtml(e.nombre)}" title="Eliminar">🗑</button>
+          ${deleteBtn}
         </div>`;
       list.appendChild(div);
     });
@@ -508,9 +516,12 @@
       const isMe = a.email === myEmail;
       const div = document.createElement("div");
       div.className = "admin-row";
+      const superBadge = a.super ? '<span class="admin-super">⭐ SUPER</span>' : '';
+      const meBadge = isMe ? '<span class="admin-self">(tú)</span>' : '';
+      const showDelete = !a.super && !isMe;
       div.innerHTML = `
-        <span class="admin-email">${escapeHtml(a.email)}${isMe ? '<span class="admin-self">(tú)</span>' : ''}</span>
-        ${isMe ? "" : `<button class="btn-mini btn-mini-ghost" data-email="${escapeHtml(a.email)}" title="Quitar admin">✕</button>`}`;
+        <span class="admin-email">${escapeHtml(a.email)}${superBadge}${meBadge}</span>
+        ${showDelete ? `<button class="btn-mini btn-mini-ghost" data-email="${escapeHtml(a.email)}" title="Quitar admin">✕</button>` : ""}`;
       list.appendChild(div);
     });
     list.querySelectorAll("[data-email]").forEach(b =>
