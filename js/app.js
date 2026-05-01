@@ -6,22 +6,29 @@ const sb = window.supabase.createClient(
   window.JET_CONFIG.SUPABASE_KEY
 );
 const CFG = window.JET_CONFIG;
-const LS_KEY = "jet_user_v2";
+const LS_KEY = "jet_user_v3";
 
 const $ = sel => document.querySelector(sel);
+const $$ = sel => Array.from(document.querySelectorAll(sel));
 
 // ── State ───────────────────────────────────────────────────────────────────
-let session = null;       // { empleado, parque }
+let session = null;       // { id, nombre }
 let pendingAction = null;
+let currentGPS = null;    // {lat, lng}
+let nearestPark = null;   // {name, distance}
+let map = null;
+let userMarker = null;
+let parkMarkers = {};
 
 // ── UI helpers ──────────────────────────────────────────────────────────────
 function showView(id) {
-  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  $$(".view").forEach(v => v.classList.remove("active"));
   $(id).classList.add("active");
+  // Re-render Leaflet when entering main (size fix after hidden)
+  if (id === "#view-main" && map) setTimeout(() => map.invalidateSize(), 50);
 }
 function showOverlay(t) { $("#overlay-text").textContent = t || "Procesando..."; $("#overlay").classList.remove("hidden"); }
 function hideOverlay() { $("#overlay").classList.add("hidden"); }
-
 function toast(msg, kind) {
   const t = document.createElement("div");
   t.className = "toast " + (kind || "");
@@ -30,27 +37,33 @@ function toast(msg, kind) {
   setTimeout(() => t.remove(), 3500);
 }
 
-// ── Date / time helpers (timezone-aware) ────────────────────────────────────
-function todayStr() {
-  return new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+// ── Date / time helpers ─────────────────────────────────────────────────────
+function todayStr() { return new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE }); }
+function nowTime()  { return new Date().toLocaleTimeString("en-GB", { timeZone: CFG.TIMEZONE, hour12: false }); }
+function dateOffset(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
 }
-function nowTime() {
-  return new Date().toLocaleTimeString("en-GB", { timeZone: CFG.TIMEZONE, hour12: false });
+function getMondayDate(weeksAgo) {
+  const d = new Date();
+  const day = (d.getDay() + 6) % 7; // Mon=0...Sun=6
+  d.setDate(d.getDate() - day - 7 * (weeksAgo || 0));
+  return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
 }
 
-// ── Login flow ──────────────────────────────────────────────────────────────
-function loadConfigUI() {
-  const sel1 = $("#select-empleado");
-  CFG.EMPLEADOS.forEach(n => {
+// ── Login: load empleados from DB ───────────────────────────────────────────
+async function loadEmpleados() {
+  const sel = $("#select-empleado");
+  sel.innerHTML = "<option value=''>— Cargando... —</option>";
+  const { data, error } = await sb.from("empleados").select("id, nombre").eq("activo", true).order("nombre");
+  if (error) { toast("Error: " + error.message, "error"); return; }
+  sel.innerHTML = "<option value=''>— Selecciona —</option>";
+  data.forEach(e => {
     const o = document.createElement("option");
-    o.value = n; o.textContent = n;
-    sel1.appendChild(o);
-  });
-  const sel2 = $("#select-parque");
-  Object.keys(CFG.PARQUES).forEach(p => {
-    const o = document.createElement("option");
-    o.value = p; o.textContent = p;
-    sel2.appendChild(o);
+    o.value = JSON.stringify({ id: e.id, nombre: e.nombre });
+    o.textContent = e.nombre;
+    sel.appendChild(o);
   });
 }
 
@@ -61,43 +74,145 @@ function loadSession() {
 function clearSession() { localStorage.removeItem(LS_KEY); }
 
 $("#btn-continuar").addEventListener("click", () => {
-  const empleado = $("#select-empleado").value;
-  const parque = $("#select-parque").value;
-  if (!empleado || !parque) { toast("Selecciona nombre y punto", "error"); return; }
-  session = { empleado, parque };
+  const v = $("#select-empleado").value;
+  if (!v) { toast("Selecciona tu nombre", "error"); return; }
+  session = JSON.parse(v);
   saveSession(session);
   enterMain();
+});
+
+$("#btn-go-register").addEventListener("click", () => {
+  showView("#view-register");
+});
+
+$("#btn-back-login").addEventListener("click", () => {
+  showView("#view-login");
+});
+
+$("#btn-register").addEventListener("click", async () => {
+  const nombre = $("#reg-nombre").value.trim();
+  const tel = $("#reg-telefono").value.trim() || null;
+  if (!nombre || nombre.length < 3) { toast("Ingresa tu nombre completo", "error"); return; }
+  showOverlay("Registrando...");
+  try {
+    const { data, error } = await sb.from("empleados").insert({ nombre, telefono: tel }).select("id, nombre").single();
+    if (error) {
+      if (error.code === "23505") throw new Error("Ya existe un empleado con ese nombre");
+      throw error;
+    }
+    session = { id: data.id, nombre: data.nombre };
+    saveSession(session);
+    toast("¡Bienvenido " + nombre + "!", "success");
+    await enterMain();
+  } catch (e) {
+    toast(e.message || String(e), "error");
+  } finally {
+    hideOverlay();
+  }
 });
 
 $("#btn-logout").addEventListener("click", () => {
   clearSession();
   session = null;
   showView("#view-login");
+  loadEmpleados();
 });
 
 // ── Main view ───────────────────────────────────────────────────────────────
 async function enterMain() {
-  $("#display-empleado").textContent = session.empleado;
-  $("#display-parque").textContent = session.parque;
+  $("#display-empleado").textContent = session.nombre;
+  $("#display-status-park").textContent = "Esperando GPS…";
   showView("#view-main");
+  initMap();
+  startGPSWatch();
   await refreshStatus();
 }
 
+function initMap() {
+  if (map) return;
+  map = L.map("map", { zoomControl: true, attributionControl: false }).setView([25.66, -100.38], 13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+  // Add park circles
+  Object.entries(CFG.PARQUES).forEach(([name, p]) => {
+    const circle = L.circle([p.lat, p.lng], {
+      radius: p.radius,
+      color: "#0057b8",
+      fillColor: "#2196f3",
+      fillOpacity: 0.20,
+      weight: 2,
+    }).addTo(map);
+    circle.bindTooltip(name, { permanent: false });
+    parkMarkers[name] = circle;
+  });
+  // Fit bounds to all parks
+  const bounds = L.latLngBounds(Object.values(CFG.PARQUES).map(p => [p.lat, p.lng]));
+  map.fitBounds(bounds, { padding: [30, 30] });
+}
+
+function startGPSWatch() {
+  if (!navigator.geolocation) {
+    $("#park-status").textContent = "GPS no disponible en este dispositivo";
+    return;
+  }
+  navigator.geolocation.watchPosition(
+    pos => updateUserLocation(pos.coords.latitude, pos.coords.longitude),
+    err => {
+      $("#park-status").textContent = "Permite ubicación para continuar";
+      $("#park-status").className = "park-status out-zone";
+    },
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+  );
+}
+
+function updateUserLocation(lat, lng) {
+  currentGPS = { lat, lng };
+  // Find nearest park
+  let nearest = null, minDist = Infinity;
+  Object.entries(CFG.PARQUES).forEach(([name, p]) => {
+    const d = haversine(lat, lng, p.lat, p.lng);
+    if (d < minDist) { minDist = d; nearest = { name, distance: d, park: p }; }
+  });
+  nearestPark = nearest;
+
+  // Update user marker
+  if (userMarker) userMarker.remove();
+  userMarker = L.marker([lat, lng], {
+    icon: L.divIcon({
+      html: '<div style="background:#1976d2;border:3px solid white;border-radius:50%;width:18px;height:18px;box-shadow:0 0 0 2px #1976d2;"></div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+      className: "",
+    })
+  }).addTo(map);
+
+  // Update status
+  const ps = $("#park-status");
+  if (nearest && nearest.distance <= nearest.park.radius) {
+    ps.textContent = `✓ Estás en ${nearest.name}`;
+    ps.className = "park-status in-zone";
+    $("#display-status-park").textContent = nearest.name;
+  } else if (nearest) {
+    ps.textContent = `Estás a ${Math.round(nearest.distance)}m de ${nearest.name}. Acércate al punto.`;
+    ps.className = "park-status out-zone";
+    $("#display-status-park").textContent = `${Math.round(nearest.distance)}m de ${nearest.name}`;
+  } else {
+    ps.textContent = "Sin puntos configurados";
+    ps.className = "park-status";
+  }
+}
+
 async function refreshStatus() {
-  showOverlay("Cargando estado...");
   try {
     const { data, error } = await sb
       .from("turnos")
       .select("*")
-      .eq("empleado", session.empleado)
+      .eq("empleado", session.nombre)
       .eq("fecha", todayStr())
       .maybeSingle();
     if (error) throw error;
-    renderStatus(buildStatus(data));
+    renderStatus(buildStatus(data), data);
   } catch (e) {
     toast("Error: " + (e.message || e), "error");
-  } finally {
-    hideOverlay();
   }
 }
 
@@ -116,7 +231,7 @@ function buildStatus(row) {
   return out;
 }
 
-function renderStatus(r) {
+function renderStatus(r, row) {
   const STATES = {
     idle:     { icon: "⏸", text: "Sin turno activo hoy" },
     working:  { icon: "🟢", text: "Trabajando" },
@@ -125,7 +240,7 @@ function renderStatus(r) {
   };
   const cur = STATES[r.state] || STATES.idle;
   $("#status-icon").textContent = cur.icon;
-  $("#status-text").textContent = cur.text;
+  $("#status-text").textContent = cur.text + (row && row.punto ? ` · ${row.punto}` : "");
 
   const times = $("#status-times");
   times.innerHTML = "";
@@ -158,14 +273,20 @@ function renderStatus(r) {
     b.onclick = () => triggerAction(action);
     actions.appendChild(b);
   });
-
-  $("#info-line").textContent = r.state === "closed"
-    ? "Buen trabajo! Vuelve mañana."
-    : "Cada acción registra ubicación y foto.";
 }
 
-// ── Action: GPS → camera → upload → DB ──────────────────────────────────────
+// ── Action: GPS check → camera → upload → DB ────────────────────────────────
 function triggerAction(action) {
+  if (!currentGPS) {
+    toast("Esperando ubicación... permite GPS", "error");
+    return;
+  }
+  if (!nearestPark || nearestPark.distance > nearestPark.park.radius) {
+    const dist = nearestPark ? Math.round(nearestPark.distance) : "?";
+    const name = nearestPark ? nearestPark.name : "?";
+    toast(`No estás en ningún punto. ${dist}m de ${name}`, "error");
+    return;
+  }
   pendingAction = action;
   $("#photo-input").value = "";
   $("#photo-input").click();
@@ -174,20 +295,15 @@ function triggerAction(action) {
 $("#photo-input").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  showOverlay("Obteniendo ubicación...");
+  if (!currentGPS || !nearestPark) { toast("GPS perdido", "error"); return; }
+
+  showOverlay("Comprimiendo foto...");
   try {
-    const coords = await getGPS();
-    const park = CFG.PARQUES[session.parque];
-    const dist = haversine(coords.lat, coords.lng, park.lat, park.lng);
-    if (dist > park.radius) {
-      throw new Error(`Estás a ${Math.round(dist)}m de ${session.parque}. Debes estar a menos de ${park.radius}m.`);
-    }
-    showOverlay("Comprimiendo foto...");
     const blob = await compressImageToBlob(file);
     showOverlay("Subiendo foto...");
     const photoUrl = await uploadPhoto(blob, pendingAction);
     showOverlay("Registrando...");
-    const result = await commitEvent(pendingAction, photoUrl, coords);
+    const result = await commitEvent(pendingAction, photoUrl, currentGPS, nearestPark.name);
     toast(result.message, "success");
     await refreshStatus();
   } catch (err) {
@@ -199,36 +315,30 @@ $("#photo-input").addEventListener("change", async (e) => {
 });
 
 async function uploadPhoto(blob, action) {
-  const safeName = session.empleado.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeName = session.nombre.replace(/[^a-zA-Z0-9_-]/g, "_");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const path = `${todayStr()}/${safeName}_${action}_${stamp}.jpg`;
   const { error } = await sb.storage.from("fotos").upload(path, blob, {
-    contentType: "image/jpeg",
-    upsert: false,
+    contentType: "image/jpeg", upsert: false,
   });
   if (error) throw new Error("Error subiendo foto: " + error.message);
   const { data } = sb.storage.from("fotos").getPublicUrl(path);
   return data.publicUrl;
 }
 
-async function commitEvent(action, photoUrl, coords) {
+async function commitEvent(action, photoUrl, coords, parkName) {
   const time = nowTime();
   const fecha = todayStr();
   const gps = coords.lat.toFixed(5) + "," + coords.lng.toFixed(5);
 
-  // Buscar si ya hay turno hoy
   const { data: existing, error: e0 } = await sb.from("turnos")
-    .select("*")
-    .eq("empleado", session.empleado)
-    .eq("fecha", fecha)
-    .maybeSingle();
+    .select("*").eq("empleado", session.nombre).eq("fecha", fecha).maybeSingle();
   if (e0) throw new Error(e0.message);
 
   if (action === "start_shift") {
     if (existing) throw new Error("Ya iniciaste turno hoy");
     const { error } = await sb.from("turnos").insert({
-      empleado: session.empleado,
-      fecha, punto: session.parque,
+      empleado: session.nombre, fecha, punto: parkName,
       entrada: time, foto_entrada: photoUrl, gps_entrada: gps,
     });
     if (error) throw new Error(error.message);
@@ -266,8 +376,67 @@ async function commitEvent(action, photoUrl, coords) {
     if (error) throw new Error(error.message);
     return { message: `Turno cerrado, ${time}. Trabajaste ${horas.trabajadas}` };
   }
-
   throw new Error("Acción desconocida");
+}
+
+// ── Mis horas view ──────────────────────────────────────────────────────────
+$("#btn-mis-horas").addEventListener("click", () => loadMisHoras());
+$("#btn-back-main").addEventListener("click", () => showView("#view-main"));
+
+async function loadMisHoras() {
+  showView("#view-mishoras");
+  showOverlay("Cargando historial...");
+  try {
+    const since = dateOffset(14);
+    const { data, error } = await sb.from("turnos")
+      .select("fecha, punto, entrada, salida, horas_comida, horas_trab")
+      .eq("empleado", session.nombre)
+      .gte("fecha", since)
+      .order("fecha", { ascending: false });
+    if (error) throw error;
+    renderMisHoras(data || []);
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    hideOverlay();
+  }
+}
+
+function renderMisHoras(rows) {
+  // Compute totals per week
+  const monday  = getMondayDate(0);
+  const monday1 = getMondayDate(1);
+  let secWeek = 0, secWeekPrev = 0, sec14 = 0;
+  rows.forEach(r => {
+    const sec = parseHHMM(r.horas_trab);
+    sec14 += sec;
+    if (r.fecha >= monday) secWeek += sec;
+    else if (r.fecha >= monday1) secWeekPrev += sec;
+  });
+  $("#hrs-week").textContent      = fmtHHMM(secWeek);
+  $("#hrs-week-prev").textContent = fmtHHMM(secWeekPrev);
+  $("#hrs-14d").textContent       = fmtHHMM(sec14);
+
+  const list = $("#history-list");
+  list.innerHTML = "";
+  if (!rows.length) {
+    list.innerHTML = "<div class='park-status' style='margin:0;'>No hay registros aún</div>";
+    return;
+  }
+  rows.forEach(r => {
+    const div = document.createElement("div");
+    div.className = "history-row";
+    const partial = !r.horas_trab;
+    div.innerHTML = `
+      <div>
+        <div class="date">${r.fecha}</div>
+        <span class="punto">${r.punto || "—"}</span>
+      </div>
+      <div class="hours ${partial ? 'partial' : ''}">
+        ${r.horas_trab || (r.entrada ? `desde ${r.entrada}` : "—")}
+      </div>`;
+    list.appendChild(div);
+  });
 }
 
 // ── Time math ──────────────────────────────────────────────────────────────
@@ -277,7 +446,7 @@ function parseHHMM(s) {
   return (p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0);
 }
 function fmtHHMM(secs) {
-  if (secs < 0) secs = 0;
+  if (secs <= 0) return "00:00";
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
@@ -287,18 +456,6 @@ function computeHoras(entrada, iniDesc, finDesc, salida) {
   let comida = 0;
   if (iniDesc && finDesc) comida = parseHHMM(finDesc) - parseHHMM(iniDesc);
   return { comida: fmtHHMM(comida), trabajadas: fmtHHMM(total - comida) };
-}
-
-// ── GPS / camera helpers ────────────────────────────────────────────────────
-function getGPS() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) { reject(new Error("GPS no disponible")); return; }
-    navigator.geolocation.getCurrentPosition(
-      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      err => reject(new Error("Ubicación denegada o no disponible: " + err.message)),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
-  });
 }
 
 function compressImageToBlob(file, maxDim = 800, quality = 0.7) {
@@ -343,9 +500,9 @@ function haversine(lat1, lng1, lat2, lng2) {
     toast("Falta configurar SUPABASE_URL en js/config.js", "error");
     return;
   }
-  loadConfigUI();
+  await loadEmpleados();
   const saved = loadSession();
-  if (saved && saved.empleado && saved.parque) {
+  if (saved && saved.id && saved.nombre) {
     session = saved;
     await enterMain();
   } else {

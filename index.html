@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>JET - Registro de Asistencia</title>
   <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
   <main class="container">
@@ -13,33 +14,46 @@
       <p class="tagline">Registro de Asistencia</p>
     </header>
 
-    <!-- LOGIN VIEW -->
+    <!-- LOGIN -->
     <section id="view-login" class="view active">
       <h2>Identifícate</h2>
       <label class="field">
-        <span>Tu nombre</span>
+        <span>Selecciona tu nombre</span>
         <select id="select-empleado" required>
-          <option value="">— Selecciona —</option>
+          <option value="">— Cargando... —</option>
         </select>
       </label>
-      <label class="field">
-        <span>Punto de trabajo de hoy</span>
-        <select id="select-parque" required>
-          <option value="">— Selecciona —</option>
-        </select>
-      </label>
-      <button class="btn btn-primary" id="btn-continuar">Continuar</button>
+      <button class="btn btn-primary" id="btn-continuar">Entrar</button>
+      <button class="btn btn-secondary" id="btn-go-register" style="margin-top:8px;">Soy nuevo, registrarme</button>
     </section>
 
-    <!-- MAIN VIEW -->
+    <!-- REGISTER -->
+    <section id="view-register" class="view">
+      <h2>Registro</h2>
+      <label class="field">
+        <span>Nombre completo</span>
+        <input type="text" id="reg-nombre" placeholder="Juan Pérez" autocomplete="name">
+      </label>
+      <label class="field">
+        <span>Teléfono (opcional)</span>
+        <input type="tel" id="reg-telefono" placeholder="+52 81 1234 5678" autocomplete="tel">
+      </label>
+      <button class="btn btn-primary" id="btn-register">Registrarme</button>
+      <button class="btn btn-link" id="btn-back-login" style="margin-top:8px;">← Volver</button>
+    </section>
+
+    <!-- MAIN -->
     <section id="view-main" class="view">
       <div class="user-bar">
         <div>
           <strong id="display-empleado"></strong>
-          <small id="display-parque"></small>
+          <small id="display-status-park">—</small>
         </div>
         <button class="btn-link" id="btn-logout">Cambiar</button>
       </div>
+
+      <div id="map" class="map-box"></div>
+      <div id="park-status" class="park-status">Buscando ubicación…</div>
 
       <div class="status-card" id="status-card">
         <div class="status-icon" id="status-icon">⏸</div>
@@ -49,10 +63,23 @@
 
       <div class="actions" id="actions"></div>
 
-      <p class="info-line" id="info-line"></p>
+      <button class="btn btn-link" id="btn-mis-horas" style="margin-top:14px;">📊 Ver mis horas trabajadas</button>
     </section>
 
-    <!-- LOADING OVERLAY -->
+    <!-- MIS HORAS -->
+    <section id="view-mishoras" class="view">
+      <button class="btn btn-link" id="btn-back-main">← Volver</button>
+      <h2 style="margin-top:8px;">Mis horas</h2>
+      <div class="card" id="totals-card">
+        <div class="row"><span>Esta semana</span><strong id="hrs-week">—</strong></div>
+        <div class="row"><span>Semana pasada</span><strong id="hrs-week-prev">—</strong></div>
+        <div class="row"><span>Total 14 días</span><strong id="hrs-14d">—</strong></div>
+      </div>
+      <h3 style="font-size:14px;margin:16px 4px 8px;color:var(--jet-gray);text-transform:uppercase;">Historial</h3>
+      <div id="history-list"></div>
+    </section>
+
+    <!-- LOADING / TOAST -->
     <div id="overlay" class="overlay hidden">
       <div class="spinner"></div>
       <p id="overlay-text">Procesando…</p>
@@ -62,6 +89,7 @@
     <input type="file" id="photo-input" accept="image/*" capture="user" hidden>
   </main>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="js/config.js"></script>
   <script src="js/app.js"></script>

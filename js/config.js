@@ -10,13 +10,6 @@ window.JET_CONFIG = {
   // Token de admin — generado automáticamente, guárdalo en lugar seguro
   ADMIN_TOKEN: "Xoslq3P4pXK5yZMYklCw_hbPlERd4-Bs",
 
-  // Lista de empleados (editar para tu equipo real)
-  EMPLEADOS: [
-    "Juan Perez",
-    "Maria Garcia",
-    "Carlos Lopez",
-  ],
-
   // Coordenadas reales de cada punto de trabajo
   // Obtener: Google Maps > clic derecho en el punto > los 2 números
   // radius en metros — distancia máxima permitida del punto exacto
