@@ -387,6 +387,90 @@ h2 {
 .approve-btn { background: var(--jet-success); color: white; }
 .reject-btn { background: #fde8e8; color: var(--jet-danger); }
 
+/* Admin KPI cards */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.kpi {
+  background: white;
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.kpi-label {
+  font-size: 11px;
+  color: var(--jet-gray);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-weight: 600;
+}
+.kpi-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--jet-blue);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Period tabs */
+.period-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--jet-light);
+  padding: 4px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.period-tab {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--jet-gray);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.period-tab.active {
+  background: white;
+  color: var(--jet-blue);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.period-custom {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.period-summary {
+  background: linear-gradient(135deg, var(--jet-blue-pale), white);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.period-summary .row {
+  display: flex; justify-content: space-between;
+  padding: 4px 0;
+}
+.period-summary .row strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--jet-blue);
+  font-size: 15px;
+}
+.subheader {
+  font-size: 13px;
+  color: var(--jet-gray);
+  text-transform: uppercase;
+  font-weight: 600;
+  margin: 14px 0 8px;
+  letter-spacing: 0.3px;
+}
+
 .pending-card {
   background: white;
   border-radius: var(--radius);
