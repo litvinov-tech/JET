@@ -48,8 +48,10 @@
     empleados: [], pending: [], turnosToday: [],
     periodTurnos: [], periodFrom: null, periodTo: null,
     correctionsPending: [],
+    admins: [],
   };
   let empMap = {}; // empleado_id -> nombre
+  let myEmail = null;
 
   // ── Period selection ─────────────────────────────────────────────────────
   function setPeriod(p) {
@@ -79,17 +81,20 @@
     showOverlay();
     try {
       const today = todayStr();
-      const [pendingRes, activeRes, todayRes, corrRes] = await Promise.all([
+      myEmail = (await sb.auth.getUser()).data.user?.email || null;
+      const [pendingRes, activeRes, todayRes, corrRes, adminsRes] = await Promise.all([
         sb.from("empleados").select("id, nombre, email, telefono, created_at").eq("activo", false).order("created_at", { ascending: false }),
         sb.from("empleados").select("id, nombre, email, telefono").eq("activo", true).order("nombre"),
         sb.from("turnos").select("*").gte("entrada_at", today + "T00:00:00").order("entrada_at", { ascending: true }),
         sb.from("correction_requests").select("*").eq("status", "pending").order("created_at", { ascending: true }),
+        sb.from("admins").select("email, created_at").order("created_at", { ascending: true }),
       ]);
 
       cache.pending = pendingRes.data || [];
       cache.empleados = activeRes.data || [];
       cache.turnosToday = todayRes.data || [];
       cache.correctionsPending = corrRes.data || [];
+      cache.admins = adminsRes.data || [];
 
       empMap = {};
       cache.empleados.forEach(e => empMap[e.id] = e.nombre);
@@ -101,6 +106,7 @@
       renderCorrections();
       renderToday();
       renderActive();
+      renderAdmins();
       renderLiveBoard();
       await loadHoursChart();
 
@@ -464,12 +470,98 @@
       list.innerHTML = "<div class='empty'>Sin empleados aprobados</div>";
       return;
     }
+    const adminEmails = new Set(cache.admins.map(a => a.email));
     cache.empleados.forEach(e => {
       const div = document.createElement("div");
       div.className = "week-row";
-      div.innerHTML = `<span><strong>${escapeHtml(e.nombre)}</strong><br><small style="color:var(--jet-gray);font-size:11px;">${escapeHtml(e.email)}</small></span><span style="color:var(--jet-gray);font-size:12px;">${escapeHtml(e.telefono || "")}</span>`;
+      const isAdmin = adminEmails.has(e.email);
+      const adminBadge = isAdmin ? ` <span class="badge" style="background:#fff3cd;color:#6a4a00;">ADMIN</span>` : "";
+      const promoteBtn = isAdmin ? "" : `<button class="btn-mini btn-mini-promote" data-action="promote" data-email="${escapeHtml(e.email)}" data-name="${escapeHtml(e.nombre)}" title="Hacer admin">👑</button>`;
+      div.innerHTML = `
+        <span style="min-width:0;flex:1;">
+          <strong>${escapeHtml(e.nombre)}</strong>${adminBadge}<br>
+          <small style="color:var(--jet-gray);font-size:11px;">${escapeHtml(e.email)}${e.telefono ? " · " + escapeHtml(e.telefono) : ""}</small>
+        </span>
+        <div class="emp-actions">
+          ${promoteBtn}
+          <button class="btn-mini btn-mini-delete" data-action="delete-emp" data-id="${e.id}" data-name="${escapeHtml(e.nombre)}" title="Eliminar">🗑</button>
+        </div>`;
       list.appendChild(div);
     });
+    list.querySelectorAll('[data-action="promote"]').forEach(b =>
+      b.addEventListener("click", () => promoteEmp(b.dataset.email, b.dataset.name)));
+    list.querySelectorAll('[data-action="delete-emp"]').forEach(b =>
+      b.addEventListener("click", () => deleteEmp(b.dataset.id, b.dataset.name)));
+  }
+
+  // ── Render: Administradores ──────────────────────────────────────────────
+  function renderAdmins() {
+    $("#admin-admins-count").textContent = cache.admins.length;
+    const list = $("#admin-admins-list");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!cache.admins.length) {
+      list.innerHTML = "<div class='empty'>Sin administradores</div>";
+      return;
+    }
+    cache.admins.forEach(a => {
+      const isMe = a.email === myEmail;
+      const div = document.createElement("div");
+      div.className = "admin-row";
+      div.innerHTML = `
+        <span class="admin-email">${escapeHtml(a.email)}${isMe ? '<span class="admin-self">(tú)</span>' : ''}</span>
+        ${isMe ? "" : `<button class="btn-mini btn-mini-ghost" data-email="${escapeHtml(a.email)}" title="Quitar admin">✕</button>`}`;
+      list.appendChild(div);
+    });
+    list.querySelectorAll("[data-email]").forEach(b =>
+      b.addEventListener("click", () => removeAdmin(b.dataset.email)));
+  }
+
+  async function addAdmin(email) {
+    email = (email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) { alert("Email inválido"); return; }
+    showOverlay("Agregando admin...");
+    try {
+      const { error } = await sb.from("admins").insert({ email });
+      if (error) {
+        if (error.code === "23505") throw new Error("Ya es admin");
+        if (error.code === "42501" || error.message.includes("policy")) throw new Error("Sin permisos. Revisa RLS de tabla admins.");
+        throw error;
+      }
+      $("#new-admin-email").value = "";
+      await load();
+    } catch (e) { alert("Error: " + e.message); } finally { hideOverlay(); }
+  }
+
+  async function removeAdmin(email) {
+    if (email === myEmail) { alert("No puedes quitarte a ti mismo"); return; }
+    if (!confirm(`¿Quitar admin a ${email}?`)) return;
+    showOverlay("Quitando admin...");
+    try {
+      const { error } = await sb.from("admins").delete().eq("email", email);
+      if (error) throw error;
+      await load();
+    } catch (e) { alert("Error: " + e.message); } finally { hideOverlay(); }
+  }
+
+  async function promoteEmp(email, name) {
+    if (!confirm(`Hacer admin a ${name} (${email})?`)) return;
+    await addAdmin(email);
+  }
+
+  async function deleteEmp(id, name) {
+    if (!confirm(`¿Eliminar a ${name}? Esta acción borra al empleado y no se puede deshacer.`)) return;
+    if (!confirm(`Confirma de nuevo: ELIMINAR a ${name}?`)) return;
+    showOverlay("Eliminando...");
+    try {
+      const { error } = await sb.from("empleados").delete().eq("id", id);
+      if (error) {
+        if (error.message.includes("foreign key") || error.code === "23503")
+          throw new Error("Tiene turnos registrados. Primero exporta CSV o usa SQL para eliminar manualmente.");
+        throw error;
+      }
+      await load();
+    } catch (e) { alert("Error: " + e.message); } finally { hideOverlay(); }
   }
 
   // ── Approve / Reject empleado ────────────────────────────────────────────
@@ -574,6 +666,10 @@
     const lb = $("#photo-lightbox");
     if (lb) lb.addEventListener("click", e => { if (e.target === lb) closePhotoLightbox(); });
     document.addEventListener("keydown", e => { if (e.key === "Escape") closePhotoLightbox(); });
+    const addAdminBtn = $("#btn-add-admin");
+    if (addAdminBtn) addAdminBtn.addEventListener("click", () => addAdmin($("#new-admin-email").value));
+    const newAdminInput = $("#new-admin-email");
+    if (newAdminInput) newAdminInput.addEventListener("keydown", e => { if (e.key === "Enter") addAdmin(e.target.value); });
   });
 
   window.JETAdmin = { load, openPhoto };

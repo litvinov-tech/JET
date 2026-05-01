@@ -1036,5 +1036,59 @@ h2 {
   padding: 10px 12px;
   border-bottom: 1px solid #f3f4f8;
   font-size: 13px;
+  gap: 8px;
 }
 #admin-active-list .week-row:last-child { border-bottom: none; }
+.emp-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.btn-mini {
+  border: none;
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.1s, transform 0.1s;
+}
+.btn-mini:active { transform: scale(0.95); }
+.btn-mini-promote { background: #fff3cd; color: #6a4a00; }
+.btn-mini-promote:hover { filter: brightness(0.95); }
+.btn-mini-delete { background: #fde8e8; color: var(--jet-danger); }
+.btn-mini-delete:hover { filter: brightness(0.95); }
+.btn-mini-primary { background: var(--jet-blue); color: white; }
+.btn-mini-primary:hover { filter: brightness(1.1); }
+.btn-mini-ghost {
+  background: transparent;
+  color: var(--jet-danger);
+  font-size: 14px;
+  padding: 4px 8px;
+}
+.btn-mini-ghost:hover { background: #fde8e8; }
+
+/* Admin add row */
+.admin-add-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.admin-add-row input {
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 13px;
+  border: 1.5px solid #e0e8f5;
+  border-radius: 8px;
+  background: white;
+}
+.admin-add-row input:focus { outline: none; border-color: var(--jet-blue); }
+
+/* Admin list rows */
+.admin-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid #f3f4f8;
+  font-size: 13px;
+}
+.admin-row:last-child { border-bottom: none; }
+.admin-row .admin-email { font-weight: 600; color: var(--jet-dark); word-break: break-all; }
+.admin-row .admin-self { font-size: 10px; color: var(--jet-success); font-weight: 700; margin-left: 6px; }
