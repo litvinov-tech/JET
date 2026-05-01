@@ -78,7 +78,7 @@ $("#btn-continuar").addEventListener("click", () => {
   if (!v) { toast("Selecciona tu nombre", "error"); return; }
   session = JSON.parse(v);
   saveSession(session);
-  enterMain();
+  checkActiveAndProceed();
 });
 
 $("#btn-go-register").addEventListener("click", () => {
@@ -89,21 +89,34 @@ $("#btn-back-login").addEventListener("click", () => {
   showView("#view-login");
 });
 
+// Pending view handlers
+document.addEventListener("DOMContentLoaded", () => {
+  const btnCheck = $("#btn-check-again");
+  const btnPLogout = $("#btn-pending-logout");
+  if (btnCheck) btnCheck.addEventListener("click", checkActiveAndProceed);
+  if (btnPLogout) btnPLogout.addEventListener("click", () => {
+    clearSession();
+    session = null;
+    showView("#view-login");
+    loadEmpleados();
+  });
+});
+
 $("#btn-register").addEventListener("click", async () => {
   const nombre = $("#reg-nombre").value.trim();
   const tel = $("#reg-telefono").value.trim() || null;
   if (!nombre || nombre.length < 3) { toast("Ingresa tu nombre completo", "error"); return; }
   showOverlay("Registrando...");
   try {
-    const { data, error } = await sb.from("empleados").insert({ nombre, telefono: tel }).select("id, nombre").single();
+    const { data, error } = await sb.from("empleados").insert({ nombre, telefono: tel }).select("id, nombre, activo").single();
     if (error) {
       if (error.code === "23505") throw new Error("Ya existe un empleado con ese nombre");
       throw error;
     }
     session = { id: data.id, nombre: data.nombre };
     saveSession(session);
-    toast("¡Bienvenido " + nombre + "!", "success");
-    await enterMain();
+    toast("Solicitud enviada. Espera aprobación.", "success");
+    showPending();
   } catch (e) {
     toast(e.message || String(e), "error");
   } finally {
@@ -117,6 +130,40 @@ $("#btn-logout").addEventListener("click", () => {
   showView("#view-login");
   loadEmpleados();
 });
+
+// ── Pending view ────────────────────────────────────────────────────────────
+function showPending() {
+  showView("#view-pending");
+  $("#pending-name").textContent = session.nombre;
+}
+
+async function checkActiveAndProceed() {
+  // Verifica si el empleado está aprobado (activo=true) antes de ir al main
+  try {
+    const { data, error } = await sb.from("empleados")
+      .select("id, nombre, activo")
+      .eq("id", session.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      // Empleado eliminado del sistema
+      clearSession();
+      session = null;
+      toast("Tu cuenta fue eliminada. Regístrate de nuevo.", "error");
+      showView("#view-login");
+      await loadEmpleados();
+      return;
+    }
+    if (!data.activo) {
+      showPending();
+      return;
+    }
+    // Aprobado → entra al main
+    enterMain();
+  } catch (e) {
+    toast("Error verificando estado: " + e.message, "error");
+  }
+}
 
 // ── Main view ───────────────────────────────────────────────────────────────
 async function enterMain() {
@@ -504,7 +551,7 @@ function haversine(lat1, lng1, lat2, lng2) {
   const saved = loadSession();
   if (saved && saved.id && saved.nombre) {
     session = saved;
-    await enterMain();
+    await checkActiveAndProceed();
   } else {
     showView("#view-login");
   }

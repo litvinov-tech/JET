@@ -7,9 +7,6 @@ window.JET_CONFIG = {
   SUPABASE_URL: "https://erdbgzxzmezlhgworfvt.supabase.co",
   SUPABASE_KEY: "sb_publishable_0gQ_U-RW48hTNyL3XpMNrA_A24uw2pb",
 
-  // Token de admin — generado automáticamente, guárdalo en lugar seguro
-  ADMIN_TOKEN: "Xoslq3P4pXK5yZMYklCw_hbPlERd4-Bs",
-
   // Coordenadas reales de cada punto de trabajo
   // Obtener: Google Maps > clic derecho en el punto > los 2 números
   // radius en metros — distancia máxima permitida del punto exacto

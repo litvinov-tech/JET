@@ -7,16 +7,23 @@
   <link rel="stylesheet" href="css/styles.css">
   <style>
     table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: middle; }
     th { background: var(--jet-light); font-weight: 600; font-size: 12px; color: var(--jet-gray); text-transform: uppercase; }
-    .card { background: white; border-radius: var(--radius); padding: 18px; margin-bottom: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-    .card h3 { font-size: 16px; margin-bottom: 10px; }
     .empty { text-align: center; color: var(--jet-gray); padding: 24px; font-size: 14px; }
     .week-row { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #f0f0f0; }
     .week-row:last-child { border: none; }
-    .badge { background: var(--jet-orange); color: white; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; }
-    .photo-link { color: var(--jet-orange); font-size: 11px; text-decoration: none; }
+    .badge { background: var(--jet-blue); color: white; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .badge-pending { background: var(--jet-warn); color: #5a3e00; }
+    .photo-link { color: var(--jet-blue); font-size: 11px; text-decoration: none; padding: 0 3px; }
     .photo-link:hover { text-decoration: underline; }
+    .approve-btn, .reject-btn {
+      border: none; padding: 6px 12px; border-radius: 6px;
+      font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 4px;
+    }
+    .approve-btn { background: var(--jet-success); color: white; }
+    .reject-btn { background: #fde8e8; color: var(--jet-danger); }
+    .auth-info { font-size: 12px; color: var(--jet-gray); padding: 8px 0; text-align: right; }
+    .auth-info a { color: var(--jet-blue); cursor: pointer; }
   </style>
 </head>
 <body>
@@ -26,25 +33,54 @@
       <p class="tagline">Panel de Administración</p>
     </header>
 
+    <!-- LOGIN AUTH -->
     <section id="auth-view">
-      <label class="field">
-        <span>Token de acceso</span>
-        <input type="password" id="token" placeholder="••••••••" />
-      </label>
-      <button class="btn btn-primary" id="btn-load">Acceder</button>
+      <div class="card" style="padding: 22px;">
+        <h3 style="margin-bottom:14px;">Acceso administrador</h3>
+        <label class="field">
+          <span>Correo</span>
+          <input type="email" id="email" placeholder="admin@ejemplo.com" autocomplete="email" />
+        </label>
+        <label class="field">
+          <span>Contraseña</span>
+          <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
+        </label>
+        <button class="btn btn-primary" id="btn-login">Entrar</button>
+      </div>
     </section>
 
+    <!-- REPORT VIEW -->
     <section id="report-view" style="display:none;">
+      <div class="auth-info">
+        Conectado como <strong id="admin-email"></strong>
+        · <a id="link-logout">Salir</a>
+      </div>
+
+      <!-- Pending registrations -->
+      <div class="card" id="pending-card" style="display:none;">
+        <h3>Solicitudes pendientes <span class="badge badge-pending" id="pending-count">0</span></h3>
+        <div id="pending-list"></div>
+      </div>
+
+      <!-- Today -->
       <div class="card">
         <h3>Hoy <span id="today-date" class="badge"></span></h3>
         <div id="today-list"></div>
       </div>
+
+      <!-- Week -->
       <div class="card">
         <h3>Resumen semanal <small style="color:var(--jet-gray);font-weight:normal" id="week-since"></small></h3>
         <div id="week-list"></div>
       </div>
+
+      <!-- Active employees -->
+      <div class="card">
+        <h3>Empleados activos <span class="badge" id="active-count">0</span></h3>
+        <div id="active-list"></div>
+      </div>
+
       <button class="btn btn-secondary" id="btn-refresh">Actualizar</button>
-      <button class="btn btn-danger" id="btn-logout-admin" style="margin-top:10px;">Salir</button>
     </section>
 
     <div id="overlay" class="overlay hidden">
@@ -66,16 +102,13 @@
     function showOverlay(t) { $("#overlay-text").textContent = t || "Cargando..."; $("#overlay").classList.remove("hidden"); }
     function hideOverlay() { $("#overlay").classList.add("hidden"); }
 
-    function todayStr() {
-      return new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
-    }
+    function todayStr() { return new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE }); }
     function getMondayStr() {
       const d = new Date();
-      const day = (d.getDay() + 6) % 7; // Mon=0...Sun=6
+      const day = (d.getDay() + 6) % 7;
       d.setDate(d.getDate() - day);
       return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
     }
-
     function parseHHMM(s) {
       if (!s) return 0;
       const p = String(s).split(":").map(Number);
@@ -87,90 +120,172 @@
       return h + "h " + (m < 10 ? "0" : "") + m + "m";
     }
 
-    $("#btn-load").addEventListener("click", load);
-    $("#btn-refresh").addEventListener("click", load);
-    $("#btn-logout-admin").addEventListener("click", () => {
-      sessionStorage.removeItem("jet_admin_ok");
-      $("#auth-view").style.display = "block";
-      $("#report-view").style.display = "none";
-      $("#token").value = "";
-    });
+    // ── Auth flow (email + password) ──
+    $("#btn-login").addEventListener("click", login);
+    $("#password").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
 
-    async function load() {
-      const tokenInput = $("#token").value;
-      const stored = sessionStorage.getItem("jet_admin_ok");
-      if (!stored && tokenInput !== CFG.ADMIN_TOKEN) {
-        alert("Token incorrecto");
-        return;
-      }
-      sessionStorage.setItem("jet_admin_ok", "1");
-
-      showOverlay();
+    async function login() {
+      const email = $("#email").value.trim();
+      const password = $("#password").value;
+      if (!email || !email.includes("@")) { alert("Correo inválido"); return; }
+      if (!password) { alert("Ingresa la contraseña"); return; }
+      showOverlay("Verificando...");
       try {
-        const today = todayStr();
-        const monday = getMondayStr();
-
-        // Hoy
-        const { data: todayRows, error: e1 } = await sb
-          .from("turnos")
-          .select("*")
-          .eq("fecha", today)
-          .order("entrada", { ascending: true });
-        if (e1) throw e1;
-
-        // Esta semana (desde lunes)
-        const { data: weekRows, error: e2 } = await sb
-          .from("turnos")
-          .select("empleado, fecha, horas_trab")
-          .gte("fecha", monday);
-        if (e2) throw e2;
-
-        render(todayRows || [], weekRows || [], today, monday);
-      } catch (err) {
-        alert("Error: " + err.message);
+        const { data, error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        // Verify is admin
+        const { data: adminRow, error: e2 } = await sb.from("admins")
+          .select("email").eq("email", email).maybeSingle();
+        if (e2 || !adminRow) {
+          await sb.auth.signOut();
+          throw new Error("Este usuario no es administrador");
+        }
+        location.reload();
+      } catch (e) {
+        alert("Error: " + e.message);
       } finally {
         hideOverlay();
       }
     }
 
-    function render(today, week, todayStr, mondayStr) {
-      $("#auth-view").style.display = "none";
-      $("#report-view").style.display = "block";
-      $("#today-date").textContent = todayStr;
-      $("#week-since").textContent = "desde " + mondayStr;
+    $("#link-logout").addEventListener("click", async () => {
+      await sb.auth.signOut();
+      location.reload();
+    });
 
-      // HOY
+    $("#btn-refresh").addEventListener("click", load);
+
+    // Check session on load
+    (async function init() {
+      const { data: { session } } = await sb.auth.getSession();
+      if (session && session.user) {
+        $("#auth-view").style.display = "none";
+        $("#report-view").style.display = "block";
+        $("#admin-email").textContent = session.user.email;
+        await load();
+      } else {
+        $("#auth-view").style.display = "block";
+        $("#report-view").style.display = "none";
+      }
+    })();
+
+    // Auth state changes (e.g., when user clicks magic link from email)
+    sb.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session) {
+        location.reload();
+      }
+    });
+
+    async function load() {
+      showOverlay();
+      try {
+        const today = todayStr();
+        const monday = getMondayStr();
+
+        // Pending registrations
+        const { data: pending } = await sb.from("empleados")
+          .select("id, nombre, telefono, created_at")
+          .eq("activo", false)
+          .order("created_at", { ascending: false });
+
+        // Active employees
+        const { data: active } = await sb.from("empleados")
+          .select("id, nombre, telefono")
+          .eq("activo", true)
+          .order("nombre");
+
+        // Today's shifts
+        const { data: todayRows } = await sb.from("turnos")
+          .select("*")
+          .eq("fecha", today)
+          .order("entrada", { ascending: true });
+
+        // Week shifts
+        const { data: weekRows } = await sb.from("turnos")
+          .select("empleado, fecha, horas_trab")
+          .gte("fecha", monday);
+
+        render({
+          pending: pending || [],
+          active: active || [],
+          today: todayRows || [],
+          week: weekRows || [],
+          todayStr: today,
+          mondayStr: monday,
+        });
+      } catch (e) {
+        alert("Error: " + e.message);
+      } finally {
+        hideOverlay();
+      }
+    }
+
+    function render(d) {
+      // Pending
+      const pendingCard = $("#pending-card");
+      $("#pending-count").textContent = d.pending.length;
+      if (d.pending.length === 0) {
+        pendingCard.style.display = "none";
+      } else {
+        pendingCard.style.display = "block";
+        const list = $("#pending-list");
+        list.innerHTML = "";
+        const tbl = document.createElement("table");
+        tbl.innerHTML = "<thead><tr><th>Nombre</th><th>Teléfono</th><th>Solicitado</th><th></th></tr></thead>";
+        const tb = document.createElement("tbody");
+        d.pending.forEach(e => {
+          const tr = document.createElement("tr");
+          const dt = new Date(e.created_at).toLocaleString("es-MX", { timeZone: CFG.TIMEZONE, dateStyle: "short", timeStyle: "short" });
+          tr.innerHTML = `
+            <td><strong>${e.nombre}</strong></td>
+            <td>${e.telefono || "—"}</td>
+            <td style="color:var(--jet-gray);font-size:12px;">${dt}</td>
+            <td style="text-align:right;white-space:nowrap;">
+              <button class="approve-btn" data-id="${e.id}">✓ Aprobar</button>
+              <button class="reject-btn" data-id="${e.id}">✕ Rechazar</button>
+            </td>`;
+          tb.appendChild(tr);
+        });
+        tbl.appendChild(tb);
+        list.appendChild(tbl);
+
+        list.querySelectorAll(".approve-btn").forEach(btn => {
+          btn.addEventListener("click", () => approveEmployee(btn.dataset.id));
+        });
+        list.querySelectorAll(".reject-btn").forEach(btn => {
+          btn.addEventListener("click", () => rejectEmployee(btn.dataset.id));
+        });
+      }
+
+      // Today
+      $("#today-date").textContent = d.todayStr;
       const todayList = $("#today-list");
       todayList.innerHTML = "";
-      if (!today.length) {
+      if (!d.today.length) {
         todayList.innerHTML = "<div class='empty'>Aún nadie ha fichado hoy</div>";
       } else {
         const tbl = document.createElement("table");
-        tbl.innerHTML = "<thead><tr>" +
-          "<th>Empleado</th><th>Punto</th><th>Entrada</th><th>Salida</th>" +
-          "<th>Horas</th><th>Fotos</th></tr></thead>";
+        tbl.innerHTML = "<thead><tr><th>Empleado</th><th>Punto</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Fotos</th></tr></thead>";
         const tb = document.createElement("tbody");
-        today.forEach(r => {
+        d.today.forEach(r => {
           const tr = document.createElement("tr");
           const photos = [
-            r.foto_entrada ? `<a class="photo-link" href="${r.foto_entrada}" target="_blank">▶</a>` : "",
-            r.foto_ini_desc ? `<a class="photo-link" href="${r.foto_ini_desc}" target="_blank">🍴</a>` : "",
-            r.foto_fin_desc ? `<a class="photo-link" href="${r.foto_fin_desc}" target="_blank">↩</a>` : "",
-            r.foto_salida ? `<a class="photo-link" href="${r.foto_salida}" target="_blank">⏹</a>` : "",
+            r.foto_entrada && `<a class="photo-link" href="${r.foto_entrada}" target="_blank">▶</a>`,
+            r.foto_ini_desc && `<a class="photo-link" href="${r.foto_ini_desc}" target="_blank">🍴</a>`,
+            r.foto_fin_desc && `<a class="photo-link" href="${r.foto_fin_desc}" target="_blank">↩</a>`,
+            r.foto_salida && `<a class="photo-link" href="${r.foto_salida}" target="_blank">⏹</a>`,
           ].filter(Boolean).join(" ");
-          tr.innerHTML =
-            `<td>${r.empleado}</td><td>${r.punto}</td>` +
-            `<td>${r.entrada || "—"}</td><td>${r.salida || "—"}</td>` +
-            `<td>${r.horas_trab || "—"}</td><td>${photos}</td>`;
+          tr.innerHTML = `<td>${r.empleado}</td><td>${r.punto}</td><td>${r.entrada || "—"}</td><td>${r.salida || "—"}</td><td>${r.horas_trab || "—"}</td><td>${photos}</td>`;
           tb.appendChild(tr);
         });
         tbl.appendChild(tb);
         todayList.appendChild(tbl);
       }
 
-      // SEMANA — agrupar por empleado
+      // Week
+      $("#week-since").textContent = "desde " + d.mondayStr;
       const totals = {};
-      week.forEach(r => {
+      d.week.forEach(r => {
         if (!totals[r.empleado]) totals[r.empleado] = { dias: 0, segs: 0 };
         totals[r.empleado].dias++;
         totals[r.empleado].segs += parseHHMM(r.horas_trab);
@@ -189,10 +304,53 @@
           weekList.appendChild(div);
         });
       }
+
+      // Active employees
+      $("#active-count").textContent = d.active.length;
+      const activeList = $("#active-list");
+      activeList.innerHTML = "";
+      if (!d.active.length) {
+        activeList.innerHTML = "<div class='empty'>Sin empleados aún</div>";
+      } else {
+        d.active.forEach(e => {
+          const div = document.createElement("div");
+          div.className = "week-row";
+          div.innerHTML = `<span>${e.nombre}</span><span style="color:var(--jet-gray);font-size:12px;">${e.telefono || ""}</span>`;
+          activeList.appendChild(div);
+        });
+      }
     }
 
-    // Auto-load if previously authenticated this session
-    if (sessionStorage.getItem("jet_admin_ok")) load();
+    async function approveEmployee(id) {
+      showOverlay("Aprobando...");
+      try {
+        const { error } = await sb.from("empleados").update({
+          activo: true,
+          aprobado_at: new Date().toISOString(),
+          aprobado_por: (await sb.auth.getUser()).data.user?.email || "admin",
+        }).eq("id", id);
+        if (error) throw error;
+        await load();
+      } catch (e) {
+        alert("Error: " + e.message);
+      } finally {
+        hideOverlay();
+      }
+    }
+
+    async function rejectEmployee(id) {
+      if (!confirm("¿Eliminar esta solicitud?")) return;
+      showOverlay("Rechazando...");
+      try {
+        const { error } = await sb.from("empleados").delete().eq("id", id);
+        if (error) throw error;
+        await load();
+      } catch (e) {
+        alert("Error: " + e.message);
+      } finally {
+        hideOverlay();
+      }
+    }
   </script>
 </body>
 </html>
