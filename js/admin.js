@@ -465,18 +465,33 @@
     renderTopEmployees(empAgg);
   }
 
-  // ── Render: Active employees ─────────────────────────────────────────────
+  // ── Render: Active employees agrupados por tier ──────────────────────────
   function renderActive() {
-    $("#admin-active-count").textContent = cache.empleados.length;
-    const list = $("#admin-active-list");
-    list.innerHTML = "";
-    if (!cache.empleados.length) {
-      list.innerHTML = "<div class='empty'>Sin empleados aprobados</div>";
-      return;
-    }
+    const tierBuckets = { linea: [], senior: [], manager: [] };
+    cache.empleados.forEach(e => {
+      const role = CFG.ROLES[e.puesto];
+      const tier = role ? role.tier : "linea"; // sin puesto → línea
+      tierBuckets[tier].push(e);
+    });
+
+    Object.keys(tierBuckets).forEach(tierKey => {
+      const list = $(`#admin-tier-${tierKey}-list`);
+      const cnt = $(`#admin-tier-${tierKey}-count`);
+      if (!list || !cnt) return;
+      cnt.textContent = tierBuckets[tierKey].length;
+      list.innerHTML = "";
+      if (!tierBuckets[tierKey].length) {
+        list.innerHTML = "<div class='empty'>Vacío</div>";
+        return;
+      }
+      renderTierEmpleados(list, tierBuckets[tierKey]);
+    });
+  }
+
+  function renderTierEmpleados(list, empleados) {
     const adminMap = {};
     cache.admins.forEach(a => adminMap[a.email] = a);
-    cache.empleados.forEach(e => {
+    empleados.forEach(e => {
       const div = document.createElement("div");
       div.className = "week-row";
       const adm = adminMap[e.email];
@@ -524,9 +539,11 @@
     try {
       const { error } = await sb.from("empleados").update({ puesto: puesto || null }).eq("id", empId);
       if (error) throw error;
-      // Actualizar cache local sin recarga completa
+      // Actualizar cache local
       const e = cache.empleados.find(x => String(x.id) === String(empId));
       if (e) e.puesto = puesto || null;
+      // Re-render tiers (empleado puede haber saltado a otra card)
+      renderActive();
     } catch (e) { alert("Error: " + e.message); }
   }
 

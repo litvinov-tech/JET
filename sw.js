@@ -1,5 +1,5 @@
 "use strict";
-const CACHE = "jet-v6";
+const CACHE = "jet-v7";
 const ASSETS = [
   "./",
   "./index.html",

@@ -22,9 +22,18 @@ window.JET_CONFIG = {
 
   // Puestos (roles) de los empleados
   ROLES: {
-    conductor:        { label: "Conductor",        icon: "🚗", color: "#005bff", bg: "#e3edff" },
-    asist_logistica:  { label: "Asist. Logística", icon: "📦", color: "#7b1fa2", bg: "#f3e5f5" },
-    seguridad:        { label: "Seguridad",        icon: "🛡", color: "#00875a", bg: "#e3f7e8" },
+    conductor:        { label: "Conductor",        icon: "🚗", color: "#005bff", bg: "#e3edff", tier: "linea"   },
+    asist_logistica:  { label: "Asist. Logística", icon: "📦", color: "#7b1fa2", bg: "#f3e5f5", tier: "linea"   },
+    seguridad:        { label: "Seguridad",        icon: "🛡", color: "#00875a", bg: "#e3f7e8", tier: "linea"   },
+    senior_grupo:     { label: "Senior de grupo",  icon: "⭐", color: "#b07a00", bg: "#fff3cd", tier: "senior"  },
+    manager:          { label: "Manager",          icon: "🎯", color: "#c62828", bg: "#fde8e8", tier: "manager" },
+  },
+
+  // Tiers — para agrupar empleados en cards separadas
+  TIERS: {
+    linea:   { label: "Línea",            icon: "👷" },
+    senior:  { label: "Senior de grupo",  icon: "⭐" },
+    manager: { label: "Managers",         icon: "🎯" },
   },
 
   // Estados de un día en horarios
