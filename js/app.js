@@ -79,7 +79,10 @@ function fmtSecsHM(secs) {
 // ── Tabs ────────────────────────────────────────────────────────────────────
 function showTabs() {
   $("#tabs").style.display = "flex";
-  $("#tab-admin").style.display = (me && me.isAdmin) ? "block" : "none";
+  const isAdmin = me && me.isAdmin;
+  $("#tab-admin").style.display = isAdmin ? "block" : "none";
+  // Los admins no fichan tiempo: ocultar tab "Mi turno"
+  $("#tab-empleado").style.display = isAdmin ? "none" : "block";
 }
 function hideTabs() { $("#tabs").style.display = "none"; }
 function switchTab(name) {
@@ -179,18 +182,6 @@ async function loadMe() {
     const { data: e } = await sb.from("empleados").select("*").eq("auth_user_id", userId).maybeSingle();
     emp = e;
   } catch {}
-
-  // Auto-aprobar a admins (un admin no necesita esperar aprobación para tener su perfil de empleado)
-  if (isAdmin && emp && !emp.activo) {
-    try {
-      const { error } = await sb.from("empleados").update({
-        activo: true,
-        aprobado_at: new Date().toISOString(),
-        aprobado_por: email,
-      }).eq("id", emp.id);
-      if (!error) emp.activo = true;
-    } catch {}
-  }
 
   me = {
     auth_user_id: userId, email,
