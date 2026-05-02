@@ -679,22 +679,27 @@ function renderMisHoras(turnos, corrections, shifts) {
   const list = $("#history-list");
   list.innerHTML = "";
 
-  // Construir línea de tiempo combinada: por fecha
-  const byDate = {};
+  // Construir lista plana: cada turno = 1 entrada, cada evento (sin turno ese día) = 1 entrada
+  const items = [];
+  const datesWithTurnos = new Set();
   turnos.forEach(r => {
     const d = fmtDateLocal(r.entrada_at);
-    (byDate[d] = byDate[d] || {}).turno = r;
+    datesWithTurnos.add(d);
+    items.push({ sortKey: r.entrada_at, date: d, turno: r });
   });
   shifts.forEach(s => {
-    (byDate[s.fecha] = byDate[s.fecha] || {}).shift = s;
+    if (datesWithTurnos.has(s.fecha)) return; // si hay turno real, no duplicamos con evento
+    items.push({ sortKey: s.fecha + "T00:00:00", date: s.fecha, shift: s });
   });
+  items.sort((a, b) => b.sortKey.localeCompare(a.sortKey));
 
-  const dates = Object.keys(byDate).sort().reverse();
-  if (!dates.length) {
+  if (!items.length) {
     list.innerHTML = "<div class='park-status' style='margin:0;'>No hay registros aún</div>";
   } else {
-    dates.forEach(date => {
-      const { turno: r, shift: s } = byDate[date];
+    items.forEach(it => {
+      const r = it.turno;
+      const s = it.shift;
+      const date = it.date;
       const div = document.createElement("div");
       let cls = "history-row";
       let statusPill = "";
