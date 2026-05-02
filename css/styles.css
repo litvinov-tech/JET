@@ -307,12 +307,40 @@ h2 {
   box-shadow: 0 1px 4px rgba(0,0,0,0.04);
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 10px;
   font-size: 13px;
 }
-.history-row .date { color: var(--jet-gray); }
-.history-row .punto { font-size: 11px; color: #999; display: block; }
-.history-row .hours { font-weight: 700; color: var(--jet-blue); font-variant-numeric: tabular-nums; }
+.history-row .date {
+  color: var(--jet-dark);
+  font-weight: 700;
+  font-size: 12px;
+}
+.history-row .punto-block { font-size: 11px; color: var(--jet-gray); margin-top: 4px; }
+.history-row .timeline-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-variant-numeric: tabular-nums;
+  color: var(--jet-dark);
+  font-size: 12px;
+  font-weight: 600;
+}
+.history-row .punto { font-size: 11px; color: #999; }
+.history-row .hours {
+  font-weight: 700;
+  color: var(--jet-blue);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.history-row .lunch-info {
+  font-size: 10px;
+  color: var(--jet-gray);
+  font-weight: 600;
+  margin-top: 2px;
+}
 .history-row .partial { color: var(--jet-gray); font-style: italic; font-weight: 400; }
 
 /* Top tabs (after login) */

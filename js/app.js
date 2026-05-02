@@ -75,6 +75,11 @@ function fmtSecsHM(secs) {
   const m = Math.floor((secs % 3600) / 60);
   return `${h}h ${String(m).padStart(2,"0")}m`;
 }
+function fmtDuration(secs) {
+  if (secs == null) return "—";
+  if (secs < 60) return `${Math.round(secs)}s`;
+  return fmtSecsHM(secs);
+}
 
 // ── Tabs ────────────────────────────────────────────────────────────────────
 function showTabs() {
@@ -701,8 +706,33 @@ function renderMisHoras(turnos, corrections, shifts) {
         // Hubo turno real ese día
         const inT = fmtTimeShort(r.entrada_at);
         const outT = r.salida_at ? fmtTimeShort(r.salida_at) : "abierto";
-        detail = `${r.punto || "—"} · ${inT} → ${outT}`;
-        hoursTxt = r.horas_trab_secs ? fmtSecsHM(r.horas_trab_secs) : (r.salida_at ? "—" : "en curso");
+        const iniD = r.ini_descanso_at ? fmtTimeShort(r.ini_descanso_at) : null;
+        const finD = r.fin_descanso_at ? fmtTimeShort(r.fin_descanso_at) : null;
+        const segments = [];
+        segments.push(`▶ ${inT}`);
+        if (iniD) segments.push(`🍴 ${iniD}`);
+        if (finD) segments.push(`↩ ${finD}`);
+        segments.push(`⏹ ${outT}`);
+        const punto = r.punto ? `<div class="punto" style="margin-top:2px;">${r.punto}</div>` : "";
+        detail = `<div class="timeline-row">${segments.join(" · ")}</div>${punto}`;
+        // Calcular tiempo de descanso si hay
+        const hasLunch = r.horas_comida_secs && r.horas_comida_secs > 0;
+        const lunchTxt = hasLunch ? `<div class="lunch-info">🍴 ${fmtDuration(r.horas_comida_secs)} comida</div>` : "";
+        // Calcular horas trabajadas: si BD no las tiene aún, calcular desde timestamps
+        let workSecs = r.horas_trab_secs;
+        if (!workSecs && r.salida_at) {
+          const total = Math.max(0, (new Date(r.salida_at).getTime() - new Date(r.entrada_at).getTime()) / 1000);
+          const lunchSecs = (iniD && finD) ? Math.max(0, (new Date(r.fin_descanso_at).getTime() - new Date(r.ini_descanso_at).getTime()) / 1000) : 0;
+          workSecs = total - lunchSecs;
+        }
+        if (r.salida_at) {
+          if (workSecs == null) hoursTxt = "—";
+          else if (workSecs < 60) hoursTxt = `${Math.round(workSecs)}s`;
+          else hoursTxt = fmtSecsHM(workSecs);
+        } else {
+          hoursTxt = "en curso";
+        }
+        hoursTxt += lunchTxt;
         if (r.source === "manual_correction") {
           statusPill = ` <span class="status-pill" style="background:var(--jet-warn);color:#5a3e00;">EDITADO</span>`;
         }
@@ -728,9 +758,9 @@ function renderMisHoras(turnos, corrections, shifts) {
 
       div.className = cls;
       div.innerHTML = `
-        <div>
+        <div style="flex:1;min-width:0;">
           <div class="date">${dateTxt}${statusPill}</div>
-          <span class="punto">${detail}</span>
+          <div class="punto-block">${detail}</div>
         </div>
         <div class="hours">${hoursTxt}</div>`;
       list.appendChild(div);
