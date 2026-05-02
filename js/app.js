@@ -636,11 +636,15 @@ async function loadMisHoras() {
       .eq("empleado_id", me.empleadoId)
       .order("created_at", { ascending: false }).limit(20);
 
-    // Carga shift_assignments en el rango (planeado + libre + falta + enfermo)
+    // Solo eventos pasados marcados explícitamente (libre/enfermo/falta)
+    // No mostramos "scheduled" — esos son planes, no horas trabajadas
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
     const { data: shifts } = await sb.from("shift_assignments")
       .select("fecha, status, hora_inicio, hora_fin, notas")
       .eq("empleado_id", me.empleadoId)
       .gte("fecha", sinceDate)
+      .lte("fecha", today)
+      .in("status", ["day_off", "sick", "absent"])
       .order("fecha", { ascending: false });
 
     renderMisHoras(data || [], corr || [], shifts || []);
