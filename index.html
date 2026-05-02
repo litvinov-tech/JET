@@ -24,6 +24,7 @@
     <!-- TABS (visible cuando hay sesión) -->
     <nav id="tabs" class="tabs" style="display:none;">
       <button class="tab active" data-tab="empleado" id="tab-empleado">👤 Mi turno</button>
+      <button class="tab" data-tab="horarios" id="tab-horarios">📅 Horarios</button>
       <button class="tab" data-tab="admin" id="tab-admin" style="display:none;">⚙️ Admin</button>
       <button class="tab-logout" id="tab-logout">Salir</button>
     </nav>
@@ -90,6 +91,8 @@
         <div class="emp-status-dot" id="emp-status-dot"></div>
       </div>
 
+      <div id="today-schedule" class="today-schedule" style="display:none;"></div>
+
       <div class="hero">
         <div class="hero-label" id="hero-label">SIN TURNO ACTIVO</div>
         <div class="live-timer" id="live-timer">00:00:00</div>
@@ -104,11 +107,65 @@
       <div id="map" class="map-box"></div>
       <div id="park-status" class="park-status">Buscando ubicación…</div>
 
+      <div id="week-strip" class="week-strip" style="display:none;"></div>
+
       <div class="footer-actions">
         <button class="btn btn-link" id="btn-mis-horas">📊 Mis horas</button>
         <button class="btn btn-link" id="btn-request-correction">✏️ Solicitar corrección</button>
       </div>
     </section>
+
+    <!-- ───── HORARIOS (admin & empleado) ───── -->
+    <section id="view-horarios" class="view">
+      <div class="hor-header">
+        <div>
+          <h2 class="admin-title" id="hor-title">Horarios</h2>
+          <small class="admin-subtitle" id="hor-subtitle">—</small>
+        </div>
+        <div class="hor-controls">
+          <div class="hor-mode-tabs">
+            <button class="hor-mode-tab active" data-mode="week">Semana</button>
+            <button class="hor-mode-tab" data-mode="month">Mes</button>
+          </div>
+        </div>
+      </div>
+      <div class="hor-nav">
+        <button class="btn-mini btn-mini-primary" id="hor-prev">←</button>
+        <span class="hor-range" id="hor-range">—</span>
+        <button class="btn-mini btn-mini-primary" id="hor-next">→</button>
+        <button class="btn-mini btn-mini-promote" id="hor-today">Hoy</button>
+        <button class="btn-mini btn-mini-promote" id="hor-copy-prev" title="Copiar semana anterior">⎘ Copiar prev</button>
+      </div>
+      <div id="hor-grid" class="hor-grid"></div>
+    </section>
+
+    <!-- Schedule cell editor (modal) -->
+    <div id="hor-modal" class="photo-lightbox hidden" style="background:rgba(0,0,0,0.6);">
+      <div class="hor-modal-card" onclick="event.stopPropagation();">
+        <div class="hor-modal-title" id="hor-modal-title">Editar día</div>
+        <div class="hor-modal-status" id="hor-modal-status-row">
+          <button class="hor-status-btn" data-status="scheduled">📌 Programado</button>
+          <button class="hor-status-btn" data-status="day_off">🌴 Libre</button>
+          <button class="hor-status-btn" data-status="absent">❌ Falta</button>
+          <button class="hor-status-btn" data-status="sick">🤒 Enfermo</button>
+        </div>
+        <div class="hor-modal-presets" id="hor-modal-presets">
+          <button class="hor-preset" data-inicio="07:00" data-fin="15:00">☀ Diurna<small>7:00–15:00</small></button>
+          <button class="hor-preset" data-inicio="15:00" data-fin="22:30">🌆 Mixta<small>15:00–22:30</small></button>
+          <button class="hor-preset" data-inicio="22:30" data-fin="05:30">🌙 Nocturna<small>22:30–5:30</small></button>
+        </div>
+        <div class="hor-modal-times" id="hor-modal-times">
+          <label class="field"><span>Hora inicio</span><input type="time" id="hor-modal-inicio" value="07:00"></label>
+          <label class="field"><span>Hora fin</span><input type="time" id="hor-modal-fin" value="15:00"></label>
+        </div>
+        <label class="field"><span>Notas (opcional)</span><input type="text" id="hor-modal-notas" placeholder="Notas..."></label>
+        <div class="hor-modal-actions">
+          <button class="btn btn-secondary" id="hor-modal-cancel">Cancelar</button>
+          <button class="btn btn-danger" id="hor-modal-clear" style="display:none;">Borrar</button>
+          <button class="btn btn-primary" id="hor-modal-save">Guardar</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ───── EMPLEADO: MIS HORAS ───── -->
     <section id="view-mishoras" class="view">
@@ -292,6 +349,7 @@
   <script src="js/config.js"></script>
   <script src="js/app.js"></script>
   <script src="js/admin.js"></script>
+  <script src="js/horarios.js"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

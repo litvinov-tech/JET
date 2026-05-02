@@ -83,6 +83,8 @@ function showTabs() {
   $("#tab-admin").style.display = isAdmin ? "block" : "none";
   // Los admins no fichan tiempo: ocultar tab "Mi turno"
   $("#tab-empleado").style.display = isAdmin ? "none" : "block";
+  // Horarios: visible para todos los autenticados
+  $("#tab-horarios").style.display = me ? "block" : "none";
 }
 function hideTabs() { $("#tabs").style.display = "none"; }
 function switchTab(name) {
@@ -91,6 +93,9 @@ function switchTab(name) {
   else if (name === "admin") {
     showView("#view-admin");
     if (window.JETAdmin) window.JETAdmin.load();
+  } else if (name === "horarios") {
+    showView("#view-horarios");
+    if (window.JETHorarios) window.JETHorarios.open();
   }
 }
 
@@ -255,6 +260,78 @@ async function enterMain() {
   initMap();
   startGPSWatch();
   await refreshActiveTurno();
+  loadEmpleadoSchedule(); // async, no bloquear
+}
+
+async function loadEmpleadoSchedule() {
+  if (!me || !me.empleadoId) return;
+  try {
+    const fromIso = dateOffset(0); // hoy
+    const to = new Date(); to.setDate(to.getDate() + 6);
+    const toIso = to.toISOString().slice(0, 10);
+    const { data } = await sb.from("shift_assignments")
+      .select("fecha, status, hora_inicio, hora_fin, notas")
+      .eq("empleado_id", me.empleadoId)
+      .gte("fecha", fromIso)
+      .lte("fecha", toIso)
+      .order("fecha");
+    renderTodaySchedule(data || []);
+    renderWeekStrip(data || []);
+  } catch (e) { /* silencio: schedule es opcional */ }
+}
+
+function renderTodaySchedule(rows) {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+  const todayRow = rows.find(r => r.fecha === today);
+  const el = $("#today-schedule");
+  if (!el) return;
+  if (!todayRow) { el.style.display = "none"; return; }
+  const st = CFG.SHIFT_STATUS[todayRow.status];
+  el.style.display = "flex";
+  el.className = "today-schedule is-" + todayRow.status.replace("_","-");
+  let text = "";
+  if (todayRow.status === "scheduled") {
+    text = `${todayRow.hora_inicio?.slice(0,5) || "—"} → ${todayRow.hora_fin?.slice(0,5) || "—"}`;
+    if (todayRow.notas) text += ` · ${todayRow.notas}`;
+  } else {
+    text = st ? st.label : todayRow.status;
+  }
+  el.innerHTML = `
+    <div class="ts-icon">${st ? st.icon : "📅"}</div>
+    <div style="flex:1;">
+      <div class="ts-label">Hoy · ${st ? st.label : ""}</div>
+      <div class="ts-text">${text}</div>
+    </div>`;
+}
+
+function renderWeekStrip(rows) {
+  const el = $("#week-strip");
+  if (!el) return;
+  el.style.display = "grid";
+  el.innerHTML = "";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+  const byDate = {};
+  rows.forEach(r => byDate[r.fecha] = r);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(); d.setDate(d.getDate() + i);
+    const dStr = d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+    const r = byDate[dStr];
+    const dow = d.toLocaleDateString("es-MX", { weekday: "short", timeZone: CFG.TIMEZONE }).replace(".","");
+    const num = d.getDate();
+    const isToday = dStr === today;
+    let cls = "week-cell";
+    let statusTxt = "";
+    if (isToday) cls += " is-today";
+    if (r) {
+      cls += " is-" + r.status.replace("_","-");
+      if (r.status === "scheduled") statusTxt = `${r.hora_inicio?.slice(0,5) || ""}`;
+      else statusTxt = CFG.SHIFT_STATUS[r.status]?.icon || "";
+    }
+    const cell = document.createElement("div");
+    cell.className = cls;
+    cell.innerHTML = `<div class="wc-dow">${dow}</div><div class="wc-num">${num}</div><div class="wc-status">${statusTxt}</div>`;
+    el.appendChild(cell);
+  }
 }
 
 // Bounding box de San Pedro Garza García (con margen)
@@ -559,7 +636,14 @@ async function loadMisHoras() {
       .eq("empleado_id", me.empleadoId)
       .order("created_at", { ascending: false }).limit(20);
 
-    renderMisHoras(data || [], corr || []);
+    // Carga shift_assignments en el rango (planeado + libre + falta + enfermo)
+    const { data: shifts } = await sb.from("shift_assignments")
+      .select("fecha, status, hora_inicio, hora_fin, notas")
+      .eq("empleado_id", me.empleadoId)
+      .gte("fecha", sinceDate)
+      .order("fecha", { ascending: false });
+
+    renderMisHoras(data || [], corr || [], shifts || []);
   } catch (e) {
     toast(e.message, "error");
   } finally {
@@ -567,7 +651,8 @@ async function loadMisHoras() {
   }
 }
 
-function renderMisHoras(turnos, corrections) {
+function renderMisHoras(turnos, corrections, shifts) {
+  shifts = shifts || [];
   const monday = mondayOffset(0);
   const monday1 = mondayOffset(1);
   let secWeek = 0, secWeekPrev = 0, sec14 = 0;
@@ -584,23 +669,66 @@ function renderMisHoras(turnos, corrections) {
 
   const list = $("#history-list");
   list.innerHTML = "";
-  if (!turnos.length) {
+
+  // Construir línea de tiempo combinada: por fecha
+  const byDate = {};
+  turnos.forEach(r => {
+    const d = fmtDateLocal(r.entrada_at);
+    (byDate[d] = byDate[d] || {}).turno = r;
+  });
+  shifts.forEach(s => {
+    (byDate[s.fecha] = byDate[s.fecha] || {}).shift = s;
+  });
+
+  const dates = Object.keys(byDate).sort().reverse();
+  if (!dates.length) {
     list.innerHTML = "<div class='park-status' style='margin:0;'>No hay registros aún</div>";
   } else {
-    turnos.forEach(r => {
+    dates.forEach(date => {
+      const { turno: r, shift: s } = byDate[date];
       const div = document.createElement("div");
-      div.className = "history-row";
-      const date = fmtDateLocal(r.entrada_at);
-      const inT = fmtTimeShort(r.entrada_at);
-      const outT = r.salida_at ? fmtTimeShort(r.salida_at) : "abierto";
-      const hrs = r.horas_trab_secs ? fmtSecsHM(r.horas_trab_secs) : (r.salida_at ? "—" : "en curso");
-      const corrFlag = r.source === "manual_correction" ? " <span class='badge' style='background:var(--jet-warn);color:#5a3e00;font-size:9px;'>EDITADO</span>" : "";
+      let cls = "history-row";
+      let statusPill = "";
+      let dateTxt = date;
+      let detail = "";
+      let hoursTxt = "";
+
+      if (r) {
+        // Hubo turno real ese día
+        const inT = fmtTimeShort(r.entrada_at);
+        const outT = r.salida_at ? fmtTimeShort(r.salida_at) : "abierto";
+        detail = `${r.punto || "—"} · ${inT} → ${outT}`;
+        hoursTxt = r.horas_trab_secs ? fmtSecsHM(r.horas_trab_secs) : (r.salida_at ? "—" : "en curso");
+        if (r.source === "manual_correction") {
+          statusPill = ` <span class="status-pill" style="background:var(--jet-warn);color:#5a3e00;">EDITADO</span>`;
+        }
+      } else if (s) {
+        // No hubo turno, pero hay registro de schedule
+        const st = CFG.SHIFT_STATUS[s.status];
+        cls += " is-" + s.status.replace("_","-");
+        statusPill = ` <span class="status-pill" style="background:${st?.bg};color:${st?.color};">${st?.icon} ${st?.label}</span>`;
+        if (s.status === "scheduled") {
+          detail = `${(s.hora_inicio||"").slice(0,5)} → ${(s.hora_fin||"").slice(0,5)}${s.notas ? " · " + s.notas : ""} (no fichado)`;
+          hoursTxt = "—";
+        } else if (s.status === "day_off") {
+          detail = "Día libre" + (s.notas ? " · " + s.notas : "");
+          hoursTxt = "🌴";
+        } else if (s.status === "absent") {
+          detail = "Falta" + (s.notas ? " · " + s.notas : "");
+          hoursTxt = "❌";
+        } else if (s.status === "sick") {
+          detail = "Enfermo" + (s.notas ? " · " + s.notas : "");
+          hoursTxt = "🤒";
+        }
+      }
+
+      div.className = cls;
       div.innerHTML = `
         <div>
-          <div class="date">${date}${corrFlag}</div>
-          <span class="punto">${r.punto || "—"} · ${inT} → ${outT}</span>
+          <div class="date">${dateTxt}${statusPill}</div>
+          <span class="punto">${detail}</span>
         </div>
-        <div class="hours">${hrs}</div>`;
+        <div class="hours">${hoursTxt}</div>`;
       list.appendChild(div);
     });
   }

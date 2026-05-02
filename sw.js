@@ -1,5 +1,5 @@
 "use strict";
-const CACHE = "jet-v4";
+const CACHE = "jet-v5";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,6 +7,7 @@ const ASSETS = [
   "./js/config.js",
   "./js/app.js",
   "./js/admin.js",
+  "./js/horarios.js",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-maskable.svg",

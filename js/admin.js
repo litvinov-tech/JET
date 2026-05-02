@@ -84,7 +84,7 @@
       myEmail = (await sb.auth.getUser()).data.user?.email || null;
       const [pendingRes, activeRes, todayRes, corrRes, adminsRes] = await Promise.all([
         sb.from("empleados").select("id, nombre, email, telefono, created_at").eq("activo", false).order("created_at", { ascending: false }),
-        sb.from("empleados").select("id, nombre, email, telefono").eq("activo", true).order("nombre"),
+        sb.from("empleados").select("id, nombre, email, telefono, puesto").eq("activo", true).order("nombre"),
         sb.from("turnos").select("*").gte("entrada_at", today + "T00:00:00").order("entrada_at", { ascending: true }),
         sb.from("correction_requests").select("*").eq("status", "pending").order("created_at", { ascending: true }),
         sb.from("admins").select("email, super, created_at").order("created_at", { ascending: true }),
@@ -130,8 +130,12 @@
       board.innerHTML = "<div class='live-empty'>Nadie está trabajando ahora</div>";
       return;
     }
+    const empById = {};
+    cache.empleados.forEach(e => empById[e.id] = e);
     open.forEach(t => {
-      const empName = empMap[t.empleado_id] || `(emp #${t.empleado_id})`;
+      const emp = empById[t.empleado_id];
+      const empName = (emp && emp.nombre) || empMap[t.empleado_id] || `(emp #${t.empleado_id})`;
+      const roleBadge = emp ? renderRoleBadge(emp.puesto) : "";
       const initial = empName.trim().charAt(0).toUpperCase();
       const onBreak = t.ini_descanso_at && !t.fin_descanso_at;
       const startMs = new Date(t.entrada_at).getTime();
@@ -141,7 +145,7 @@
       card.innerHTML = `
         <div class="live-card-photo" data-path="${escapeHtml(photoPath || "")}" data-caption="${escapeHtml(empName + " · entrada " + fmtTimeShort(t.entrada_at))}">${initial}</div>
         <div class="live-card-info">
-          <div class="live-card-name">${escapeHtml(empName)}</div>
+          <div class="live-card-name">${escapeHtml(empName)}${roleBadge}</div>
           <div class="live-card-park">${escapeHtml(t.punto || "—")} · entrada ${fmtTimeShort(t.entrada_at)}</div>
           <div class="live-card-timer" data-start="${startMs}" data-break-start="${t.ini_descanso_at ? new Date(t.ini_descanso_at).getTime() : ""}" data-break-end="${t.fin_descanso_at ? new Date(t.fin_descanso_at).getTime() : ""}">—</div>
         </div>`;
@@ -483,13 +487,19 @@
         : isAdmin
           ? ` <span class="badge" style="background:#fff3cd;color:#6a4a00;">ADMIN</span>`
           : "";
+      const roleBadge = renderRoleBadge(e.puesto);
       const promoteBtn = isAdmin ? "" : `<button class="btn-mini btn-mini-promote" data-action="promote" data-email="${escapeHtml(e.email)}" data-name="${escapeHtml(e.nombre)}" title="Hacer admin">👑</button>`;
       const deleteBtn = isSuper ? "" : `<button class="btn-mini btn-mini-delete" data-action="delete-emp" data-id="${e.id}" data-name="${escapeHtml(e.nombre)}" title="Eliminar">🗑</button>`;
+      const roleOptions = ["", ...Object.keys(CFG.ROLES)].map(k => {
+        const lbl = k ? `${CFG.ROLES[k].icon} ${CFG.ROLES[k].label}` : "— Sin puesto —";
+        return `<option value="${k}" ${e.puesto === k ? "selected" : ""}>${lbl}</option>`;
+      }).join("");
       div.innerHTML = `
         <span style="min-width:0;flex:1;">
-          <strong>${escapeHtml(e.nombre)}</strong>${adminBadge}<br>
+          <strong>${escapeHtml(e.nombre)}</strong>${adminBadge}${roleBadge}<br>
           <small style="color:var(--jet-gray);font-size:11px;">${escapeHtml(e.email)}${e.telefono ? " · " + escapeHtml(e.telefono) : ""}</small>
         </span>
+        <select class="role-select" data-action="set-role" data-id="${e.id}">${roleOptions}</select>
         <div class="emp-actions">
           ${promoteBtn}
           ${deleteBtn}
@@ -500,6 +510,24 @@
       b.addEventListener("click", () => promoteEmp(b.dataset.email, b.dataset.name)));
     list.querySelectorAll('[data-action="delete-emp"]').forEach(b =>
       b.addEventListener("click", () => deleteEmp(b.dataset.id, b.dataset.name)));
+    list.querySelectorAll('[data-action="set-role"]').forEach(s =>
+      s.addEventListener("change", () => setRole(s.dataset.id, s.value)));
+  }
+
+  function renderRoleBadge(puesto) {
+    if (!puesto || !CFG.ROLES[puesto]) return "";
+    const r = CFG.ROLES[puesto];
+    return ` <span class="role-badge" style="background:${r.bg};color:${r.color};">${r.icon} ${r.label}</span>`;
+  }
+
+  async function setRole(empId, puesto) {
+    try {
+      const { error } = await sb.from("empleados").update({ puesto: puesto || null }).eq("id", empId);
+      if (error) throw error;
+      // Actualizar cache local sin recarga completa
+      const e = cache.empleados.find(x => String(x.id) === String(empId));
+      if (e) e.puesto = puesto || null;
+    } catch (e) { alert("Error: " + e.message); }
   }
 
   // ── Render: Administradores ──────────────────────────────────────────────
@@ -683,5 +711,5 @@
     if (newAdminInput) newAdminInput.addEventListener("keydown", e => { if (e.key === "Enter") addAdmin(e.target.value); });
   });
 
-  window.JETAdmin = { load, openPhoto };
+  window.JETAdmin = { load, openPhoto, renderRoleBadge, getEmpleados: () => cache.empleados, getMyEmail: () => myEmail };
 })();

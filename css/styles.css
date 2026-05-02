@@ -1030,6 +1030,263 @@ h2 {
 .admin-table tr:hover td { background: #fafbff; }
 .admin-table tr:last-child td { border-bottom: none; }
 
+/* Role badges */
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.role-select {
+  font-size: 11px;
+  border: 1.5px solid #e0e8f5;
+  border-radius: 6px;
+  padding: 4px 6px;
+  background: white;
+  cursor: pointer;
+}
+.role-select:focus { outline: none; border-color: var(--jet-blue); }
+
+/* Today schedule (employee main) */
+.today-schedule {
+  background: linear-gradient(135deg, #fff8e1, white);
+  border: 1px solid #ffe49a;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.today-schedule.is-day-off { background: linear-gradient(135deg, #e3f7e8, white); border-color: #b6e6c2; }
+.today-schedule.is-absent  { background: linear-gradient(135deg, #fde8e8, white); border-color: #f5b7b7; }
+.today-schedule.is-sick    { background: linear-gradient(135deg, #fff3cd, white); border-color: #ffe49a; }
+.today-schedule .ts-icon { font-size: 22px; flex-shrink: 0; }
+.today-schedule .ts-label {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
+  color: var(--jet-gray); text-transform: uppercase;
+}
+.today-schedule .ts-text { font-weight: 700; color: var(--jet-dark); margin-top: 2px; }
+
+/* Week strip (next 7 days for empleado) */
+.week-strip {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  background: white;
+  border-radius: 12px;
+  padding: 10px 8px;
+  margin-top: 14px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.week-cell {
+  text-align: center;
+  padding: 6px 2px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+.week-cell .wc-dow {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--jet-gray);
+  text-transform: uppercase;
+}
+.week-cell .wc-num { font-size: 14px; font-weight: 800; color: var(--jet-dark); margin-top: 2px; }
+.week-cell .wc-status { font-size: 10px; margin-top: 2px; line-height: 1.1; }
+.week-cell.is-today { background: var(--jet-blue-pale); }
+.week-cell.is-scheduled { background: #e3edff; }
+.week-cell.is-day-off { background: #e3f7e8; }
+.week-cell.is-absent { background: #fde8e8; }
+.week-cell.is-sick { background: #fff3cd; }
+
+/* Horarios admin grid */
+.hor-header {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  padding: 4px 4px 14px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.hor-mode-tabs {
+  display: flex;
+  background: var(--jet-light);
+  padding: 3px;
+  border-radius: 8px;
+}
+.hor-mode-tab {
+  border: none;
+  background: transparent;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--jet-gray);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.hor-mode-tab.active {
+  background: white; color: var(--jet-blue);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.hor-nav {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.hor-range {
+  flex: 1; min-width: 200px;
+  font-size: 14px; font-weight: 700; color: var(--jet-dark);
+  text-align: center;
+}
+
+.hor-grid {
+  background: white;
+  border-radius: 12px;
+  overflow: auto;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.04);
+  border: 1px solid #f0f0f5;
+}
+.hor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.hor-table th, .hor-table td {
+  border: 1px solid #f0f0f5;
+  padding: 0;
+  vertical-align: top;
+}
+.hor-table th {
+  background: #f7f9ff;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--jet-gray);
+  padding: 8px 6px;
+  position: sticky; top: 0;
+  z-index: 2;
+}
+.hor-table th.is-today { background: #e3edff; color: var(--jet-blue); }
+.hor-table td.emp-cell {
+  background: #fafbff;
+  padding: 10px 12px;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--jet-dark);
+  position: sticky; left: 0;
+  z-index: 1;
+  min-width: 140px;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hor-cell {
+  min-width: 64px;
+  height: 56px;
+  padding: 4px 6px;
+  cursor: pointer;
+  transition: filter 0.1s;
+  font-size: 11px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 2px;
+}
+.hor-cell:hover { filter: brightness(0.96); }
+.hor-cell.empty { background: white; color: #bbb; }
+.hor-cell.empty:hover { background: var(--jet-blue-pale); color: var(--jet-blue); }
+.hor-cell.is-scheduled { background: #e3edff; color: #1a3d80; }
+.hor-cell.is-day-off { background: #e3f7e8; color: #1a6b2f; }
+.hor-cell.is-absent { background: #fde8e8; color: #862020; }
+.hor-cell.is-sick { background: #fff3cd; color: #6a4a00; }
+.hor-cell.is-worked { background: #d4f4dd; color: #0f5223; border: 1.5px solid #1a6b2f; }
+.hor-cell .hc-time { font-weight: 800; font-size: 12px; }
+.hor-cell .hc-status { font-size: 10px; opacity: 0.85; }
+.hor-cell.is-today-col { box-shadow: inset 0 0 0 2px var(--jet-blue); }
+
+/* Schedule modal */
+#hor-modal { background: rgba(0,0,0,0.6); align-items: center; justify-content: center; }
+.hor-modal-card {
+  background: white;
+  border-radius: 14px;
+  padding: 20px;
+  width: 100%;
+  max-width: 360px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+}
+.hor-modal-title {
+  font-size: 16px; font-weight: 800; color: var(--jet-dark);
+  margin-bottom: 14px;
+}
+.hor-modal-status {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  margin-bottom: 14px;
+}
+.hor-status-btn {
+  border: 2px solid #e0e8f5;
+  background: white;
+  border-radius: 9px;
+  padding: 10px 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.12s;
+  color: var(--jet-dark);
+}
+.hor-status-btn:active { transform: scale(0.97); }
+.hor-status-btn.active { border-color: var(--jet-blue); background: var(--jet-blue-pale); color: var(--jet-blue); }
+.hor-modal-presets {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;
+  margin-bottom: 10px;
+}
+.hor-preset {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  border: 1.5px solid #e0e8f5;
+  background: white;
+  border-radius: 9px;
+  padding: 8px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--jet-dark);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.hor-preset small { font-size: 9px; font-weight: 600; color: var(--jet-gray); }
+.hor-preset:hover { background: var(--jet-blue-pale); border-color: var(--jet-blue); }
+.hor-preset.active { border-color: var(--jet-blue); background: var(--jet-blue-pale); color: var(--jet-blue); }
+.hor-preset.active small { color: var(--jet-blue); }
+.hor-modal-times {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  margin-bottom: 6px;
+}
+.hor-modal-actions {
+  display: flex; gap: 8px; margin-top: 14px;
+}
+.hor-modal-actions .btn { margin: 0; }
+
+/* History rows enhancement (Mis horas) */
+.history-row.is-day-off  { background: #f4faf6; }
+.history-row.is-absent   { background: #fef3f3; }
+.history-row.is-sick     { background: #fffaf0; }
+.history-row .status-pill {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-left: 6px;
+}
+
 /* Active employees — nicer cards */
 #admin-active-list .week-row {
   display: flex; justify-content: space-between; align-items: center;
