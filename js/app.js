@@ -421,7 +421,7 @@ function updateUserLocation(lat, lng, accuracy) {
 async function refreshActiveTurno() {
   try {
     const { data, error } = await sb.from("turnos")
-      .select("*").eq("empleado_id", me.empleadoId).is("salida_at", null)
+      .select("*").eq("empleado_id", me.empleadoId).is("salida_at", null).is("deleted_at", null)
       .order("entrada_at", { ascending: false }).limit(1).maybeSingle();
     if (error) throw error;
     activeTurno = data;
@@ -631,6 +631,7 @@ async function loadMisHoras() {
     const { data, error } = await sb.from("turnos")
       .select("id, punto, entrada_at, ini_descanso_at, fin_descanso_at, salida_at, horas_comida_secs, horas_trab_secs, source")
       .eq("empleado_id", me.empleadoId)
+      .is("deleted_at", null)
       .gte("entrada_at", sinceDate + "T00:00:00")
       .order("entrada_at", { ascending: false });
     if (error) throw error;

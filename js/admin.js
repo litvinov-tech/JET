@@ -85,7 +85,7 @@
       const [pendingRes, activeRes, todayRes, corrRes, adminsRes] = await Promise.all([
         sb.from("empleados").select("id, nombre, email, telefono, created_at").eq("activo", false).order("created_at", { ascending: false }),
         sb.from("empleados").select("id, nombre, email, telefono, puesto").eq("activo", true).order("nombre"),
-        sb.from("turnos").select("*").gte("entrada_at", today + "T00:00:00").order("entrada_at", { ascending: true }),
+        sb.from("turnos").select("*").is("deleted_at", null).gte("entrada_at", today + "T00:00:00").order("entrada_at", { ascending: true }),
         sb.from("correction_requests").select("*").eq("status", "pending").order("created_at", { ascending: true }),
         sb.from("admins").select("email, super, created_at").order("created_at", { ascending: true }),
       ]);
@@ -199,6 +199,7 @@
     try {
       const { data, error } = await sb.from("turnos")
         .select("entrada_at, horas_trab_secs")
+        .is("deleted_at", null)
         .gte("entrada_at", fromIso).lte("entrada_at", toIso);
       if (error) throw error;
       const byDay = {};
@@ -287,7 +288,7 @@
       const fromIso = cache.periodFrom + "T00:00:00";
       const toIso = cache.periodTo + "T23:59:59";
       const { data, error } = await sb.from("turnos")
-        .select("*").gte("entrada_at", fromIso).lte("entrada_at", toIso)
+        .select("*").is("deleted_at", null).gte("entrada_at", fromIso).lte("entrada_at", toIso)
         .order("entrada_at", { ascending: false });
       if (error) throw error;
       cache.periodTurnos = data || [];
@@ -384,7 +385,7 @@
     }
     const tbl = document.createElement("table");
     tbl.className = "admin-table";
-    tbl.innerHTML = "<thead><tr><th>Empleado</th><th>Punto</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Fotos</th></tr></thead>";
+    tbl.innerHTML = "<thead><tr><th>Empleado</th><th>Punto</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Fotos</th><th></th></tr></thead>";
     const tb = document.createElement("tbody");
     cache.turnosToday.forEach(r => {
       const empName = empMap[r.empleado_id] || `(#${r.empleado_id})`;
@@ -400,9 +401,12 @@
           `<a class="photo-link" data-path="${escapeHtml(r[k])}" data-caption="${escapeHtml(empName + " · " + label)}" href="#" onclick="window.JETAdmin.openPhoto(this); return false;">${icon}</a>`
         ).join(" ");
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${r.horas_trab_secs ? fmtH(r.horas_trab_secs) : "—"}</td><td>${photosHtml}</td>`;
+      const delBtn = `<button class="btn-mini btn-mini-delete" data-action="del-turno" data-id="${r.id}" data-name="${escapeHtml(empName)}" data-time="${fmtTimeShort(r.entrada_at)}-${fmtTimeShort(r.salida_at) || "abierto"}" title="Eliminar turno">🗑</button>`;
+      tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${r.horas_trab_secs ? fmtH(r.horas_trab_secs) : "—"}</td><td>${photosHtml}</td><td>${delBtn}</td>`;
       tb.appendChild(tr);
     });
+    list.querySelectorAll('[data-action="del-turno"]').forEach(b =>
+      b.addEventListener("click", () => promptDeleteTurno(b.dataset.id, b.dataset.name, b.dataset.time)));
     tbl.appendChild(tb);
     list.appendChild(tbl);
   }
@@ -616,6 +620,25 @@
           throw new Error("Tiene turnos registrados. Primero exporta CSV o usa SQL para eliminar manualmente.");
         throw error;
       }
+      await load();
+    } catch (e) { alert("Error: " + e.message); } finally { hideOverlay(); }
+  }
+
+  async function promptDeleteTurno(turnoId, empName, timeRange) {
+    const reason = prompt(`Eliminar turno de ${empName} (${timeRange})\n\nMotivo (obligatorio):`, "");
+    if (reason === null) return;
+    if (!reason.trim() || reason.trim().length < 3) {
+      alert("Motivo requerido (mín. 3 caracteres)");
+      return;
+    }
+    showOverlay("Eliminando turno...");
+    try {
+      const { error } = await sb.from("turnos").update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: myEmail,
+        delete_reason: reason.trim(),
+      }).eq("id", turnoId);
+      if (error) throw error;
       await load();
     } catch (e) { alert("Error: " + e.message); } finally { hideOverlay(); }
   }

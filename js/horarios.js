@@ -68,6 +68,7 @@
     // 3. Turnos reales en el rango (para mostrar "trabajado")
     const { data: turnos } = await sb.from("turnos")
       .select("empleado_id, entrada_at, salida_at, horas_trab_secs")
+      .is("deleted_at", null)
       .gte("entrada_at", dStr(start) + "T00:00:00")
       .lte("entrada_at", dStr(end) + "T23:59:59");
     workedSet = {};
