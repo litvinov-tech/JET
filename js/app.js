@@ -592,16 +592,19 @@ $("#photo-input").addEventListener("change", async (e) => {
   if (!pendingAction) { actionInProgress = false; return; }
 
   let uploadedPath = null;
-  showOverlay("Comprimiendo foto...");
+  showOverlay("Obteniendo dirección...");
   try {
+    const address = await reverseGeocode(currentGPS.lat, currentGPS.lng).catch(() => "");
+    showOverlay("Comprimiendo foto...");
     const overlayData = {
       action: pendingAction,
       empleado: me?.nombre || "",
       punto: nearestPark?.name || "",
+      address: address,
       gps: { lat: currentGPS.lat, lng: currentGPS.lng, accuracy: currentGPS.accuracy },
       timezone: CFG.TIMEZONE,
     };
-    const blob = await compressImageToBlob(file, 800, 0.7, overlayData);
+    const blob = await compressImageToBlob(file, 1024, 0.78, overlayData);
     if (!blob) throw new Error("Error al comprimir foto");
     showOverlay("Subiendo foto...");
     uploadedPath = await uploadPhoto(blob, pendingAction);
@@ -930,92 +933,161 @@ function compressImageToBlob(file, maxDim = 800, quality = 0.7, overlay = null) 
   });
 }
 
-// ── Overlay: timestamp + GPS + acción + punto en la foto ────────────────────
+// ── Reverse geocode (OpenStreetMap Nominatim, бесплатно, лимит 1 req/sec) ───
+const _geoCache = {};
+async function reverseGeocode(lat, lng) {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  if (_geoCache[key]) return _geoCache[key];
+  try {
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), 3000);
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&accept-language=es`,
+      { signal: ctrl.signal, headers: { "Accept": "application/json" } }
+    );
+    clearTimeout(timeoutId);
+    if (!r.ok) return "";
+    const j = await r.json();
+    const a = j.address || {};
+    // Строим адрес: улица, район, город
+    const street = [a.road, a.house_number].filter(Boolean).join(" ");
+    const neighborhood = a.neighbourhood || a.suburb || a.quarter || "";
+    const city = a.city || a.town || a.village || a.municipality || "";
+    const parts = [street, neighborhood, city].filter(Boolean);
+    const result = parts.join(", ");
+    _geoCache[key] = result;
+    return result;
+  } catch {
+    return "";
+  }
+}
+
+// ── Overlay в стиле Timestamp Camera ────────────────────────────────────────
 function drawTimestampOverlay(ctx, w, h, ov) {
   const actionLabels = {
-    start_shift:  { icon: "▶",  text: "ENTRADA",         color: "#00d76a" },
-    start_lunch:  { icon: "🍴", text: "INICIO DESCANSO", color: "#ffc107" },
-    end_lunch:    { icon: "↩",  text: "FIN DESCANSO",    color: "#4d8eff" },
-    end_shift:    { icon: "⏹",  text: "SALIDA",          color: "#ff5252" },
+    start_shift:  { tag: "ENTRADA",         color: "#00ff7f" },
+    start_lunch:  { tag: "INICIO DESCANSO", color: "#ffd700" },
+    end_lunch:    { tag: "FIN DESCANSO",    color: "#5aa9ff" },
+    end_shift:    { tag: "SALIDA",          color: "#ff5252" },
   };
-  const a = actionLabels[ov.action] || { icon: "📷", text: ov.action || "", color: "#fff" };
+  const a = actionLabels[ov.action] || { tag: ov.action || "", color: "#ffffff" };
 
   const now = new Date();
-  const fechaStr = now.toLocaleDateString("es-MX", {
-    timeZone: ov.timezone || "America/Mexico_City",
-    day: "2-digit", month: "2-digit", year: "numeric"
+  const fechaStr = now.toLocaleDateString("en-CA", {
+    timeZone: ov.timezone || "America/Mexico_City"
   });
   const horaStr = now.toLocaleTimeString("es-GB", {
     timeZone: ov.timezone || "America/Mexico_City",
     hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit"
   });
+  const tzAbbr = (now.toLocaleTimeString("en-US", {
+    timeZone: ov.timezone || "America/Mexico_City",
+    timeZoneName: "short"
+  }).split(" ").pop()) || "";
 
+  const lat = ov.gps?.lat ?? 0;
+  const lng = ov.gps?.lng ?? 0;
+  const latStr = `${Math.abs(lat).toFixed(6)}°${lat >= 0 ? "N" : "S"}`;
+  const lngStr = `${Math.abs(lng).toFixed(6)}°${lng >= 0 ? "E" : "W"}`;
+  const acc = ov.gps?.accuracy ? `±${Math.round(ov.gps.accuracy)}m` : "";
   const empleado = ov.empleado || "";
   const punto = ov.punto || "";
-  const lat = ov.gps?.lat?.toFixed(5) ?? "—";
-  const lng = ov.gps?.lng?.toFixed(5) ?? "—";
-  const acc = ov.gps?.accuracy ? `±${Math.round(ov.gps.accuracy)}m` : "";
+  const address = ov.address || "";
 
-  // Footer band — полупрозрачный чёрный, ~25-28% высоты
-  const bandH = Math.max(140, Math.round(h * 0.27));
+  // Стиль Timestamp Camera: жёлтые цифры, моноширинный шрифт, минимальный фон
+  // Размещение слева внизу, JET-тег и action - справа внизу
+  const baseFont = Math.max(16, Math.round(w / 38));
+  const monoFont = `"SF Mono", "Roboto Mono", Menlo, Consolas, monospace`;
+  const sansFont = `-apple-system, "Segoe UI", Roboto, sans-serif`;
+
+  // Лёгкий полупрозрачный градиент снизу, чтобы текст читался на любом фоне
+  const bandH = Math.max(220, Math.round(h * 0.36));
   const y0 = h - bandH;
   const grad = ctx.createLinearGradient(0, y0, 0, h);
   grad.addColorStop(0, "rgba(0,0,0,0.0)");
-  grad.addColorStop(0.25, "rgba(0,0,0,0.65)");
-  grad.addColorStop(1, "rgba(0,0,0,0.85)");
+  grad.addColorStop(0.45, "rgba(0,0,0,0.45)");
+  grad.addColorStop(1, "rgba(0,0,0,0.75)");
   ctx.fillStyle = grad;
   ctx.fillRect(0, y0, w, bandH);
 
-  // Цветная полоска статуса слева
-  ctx.fillStyle = a.color;
-  ctx.fillRect(0, y0 + 18, 6, bandH - 30);
-
-  // Тип события (icon + label) — крупно
+  // Тень для всего текста
+  ctx.shadowColor = "rgba(0,0,0,0.95)";
+  ctx.shadowBlur = 6;
   ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.shadowColor = "rgba(0,0,0,0.8)";
-  ctx.shadowBlur = 4;
+  ctx.textBaseline = "alphabetic";
 
-  const baseFontSize = Math.max(14, Math.round(w / 36));
-  const lineH = Math.round(baseFontSize * 1.35);
-  let cy = y0 + 22;
-  const padX = 18;
+  const padX = Math.round(w * 0.04);
+  const padBottom = Math.round(h * 0.025);
+  let cy = h - padBottom;
 
+  // Снизу-вверх: координаты → адрес → дата → ВРЕМЯ (большое)
+  // 1. Координаты — мелким моноширинным жёлтым
+  ctx.fillStyle = "#ffd700";
+  ctx.font = `${Math.round(baseFont * 0.85)}px ${monoFont}`;
+  const coordText = `${latStr}  ${lngStr}` + (acc ? `  ${acc}` : "");
+  ctx.fillText(coordText, padX, cy);
+  cy -= Math.round(baseFont * 1.35);
+
+  // 2. Адрес (с reverse geocoding) или Punto, если адреса нет
+  if (address) {
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `${Math.round(baseFont * 0.95)}px ${sansFont}`;
+    // Обрезаем длинный адрес до ширины
+    const maxW = w - padX * 2 - 80;
+    let displayAddr = address;
+    while (ctx.measureText(displayAddr).width > maxW && displayAddr.length > 10) {
+      displayAddr = displayAddr.slice(0, -1);
+    }
+    if (displayAddr !== address) displayAddr = displayAddr.slice(0, -1) + "…";
+    ctx.fillText(displayAddr, padX, cy);
+    cy -= Math.round(baseFont * 1.4);
+  }
+  if (punto) {
+    ctx.fillStyle = "#7fdbff";
+    ctx.font = `bold ${Math.round(baseFont * 0.95)}px ${sansFont}`;
+    ctx.fillText(`📍 ${punto}`, padX, cy);
+    cy -= Math.round(baseFont * 1.4);
+  }
+
+  // 3. Дата
+  ctx.fillStyle = "#ffd700";
+  ctx.font = `${Math.round(baseFont * 1.05)}px ${monoFont}`;
+  ctx.fillText(fechaStr, padX, cy);
+  cy -= Math.round(baseFont * 1.55);
+
+  // 4. ВРЕМЯ — крупное, жёлтое, моноширинное
+  ctx.fillStyle = "#ffd700";
+  ctx.font = `bold ${Math.round(baseFont * 2.6)}px ${monoFont}`;
+  ctx.fillText(horaStr, padX, cy);
+
+  // TZ метка справа от времени, мелким
+  const horaWidth = ctx.measureText(horaStr).width;
+  ctx.fillStyle = "rgba(255,215,0,0.7)";
+  ctx.font = `${Math.round(baseFont * 0.8)}px ${monoFont}`;
+  ctx.fillText(tzAbbr, padX + horaWidth + 12, cy);
+
+  // ─── Правый нижний угол: action tag + JET бренд + empleado ───
+  ctx.textAlign = "right";
+
+  // Action tag — большой, цветной
+  let ry = h - padBottom - Math.round(baseFont * 0.4);
   ctx.fillStyle = a.color;
-  ctx.font = `bold ${Math.round(baseFontSize * 1.2)}px -apple-system, "Segoe UI", Roboto, sans-serif`;
-  ctx.fillText(`${a.icon}  ${a.text}`, padX, cy);
-  cy += Math.round(lineH * 1.1);
+  ctx.font = `900 ${Math.round(baseFont * 1.2)}px ${sansFont}`;
+  ctx.fillText(a.tag, w - padX, ry);
+  ry -= Math.round(baseFont * 1.5);
 
-  // Имя сотрудника (если есть)
+  // Empleado — белый
   if (empleado) {
     ctx.fillStyle = "#ffffff";
-    ctx.font = `bold ${Math.round(baseFontSize * 0.95)}px -apple-system, "Segoe UI", Roboto, sans-serif`;
-    ctx.fillText(empleado, padX, cy);
-    cy += Math.round(lineH * 0.95);
+    ctx.font = `${Math.round(baseFont * 0.85)}px ${sansFont}`;
+    ctx.fillText(empleado, w - padX, ry);
+    ry -= Math.round(baseFont * 1.3);
   }
 
-  // Дата + время
+  // JET — крупный фирменный
   ctx.fillStyle = "#ffffff";
-  ctx.font = `${Math.round(baseFontSize * 0.85)}px -apple-system, "Segoe UI", Roboto, sans-serif`;
-  ctx.fillText(`📅 ${fechaStr}   🕐 ${horaStr}`, padX, cy);
-  cy += Math.round(lineH * 0.95);
-
-  // Punto + GPS
-  if (punto) {
-    ctx.fillStyle = "#cce4ff";
-    ctx.fillText(`📍 ${punto}`, padX, cy);
-    cy += Math.round(lineH * 0.95);
-  }
-  ctx.fillStyle = "#aaccff";
-  ctx.font = `${Math.round(baseFontSize * 0.7)}px -apple-system, "Segoe UI", Roboto, sans-serif`;
-  ctx.fillText(`GPS ${lat}, ${lng} ${acc}`, padX, cy);
-
-  // Бренд JET в правом нижнем
-  ctx.shadowBlur = 0;
-  ctx.textAlign = "right";
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.font = `900 ${Math.round(baseFontSize * 1.4)}px -apple-system, "Segoe UI", Roboto, sans-serif`;
-  ctx.fillText("JET", w - 16, h - bandH + 22);
+  ctx.font = `900 ${Math.round(baseFont * 1.8)}px ${sansFont}`;
+  ctx.fillText("JET", w - padX, ry);
 
   ctx.shadowBlur = 0;
 }
