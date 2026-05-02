@@ -159,7 +159,7 @@
       if (url) {
         el.style.backgroundImage = `url("${url}")`;
         el.textContent = "";
-        el.onclick = () => openPhotoLightbox(url, el.dataset.caption);
+        el.onclick = () => openPhotoLightbox(url, el.dataset.caption, path);
       }
     });
     tickLiveTimers();
@@ -268,12 +268,25 @@
   }
 
   // ── Photo lightbox ───────────────────────────────────────────────────────
-  function openPhotoLightbox(url, caption) {
+  let lightboxRetried = false;
+  let lightboxPath = null;
+  function openPhotoLightbox(url, caption, path) {
     const lb = $("#photo-lightbox");
     if (!lb) return;
-    $("#lightbox-img").src = url;
+    const img = $("#lightbox-img");
+    img.src = url;
     $("#lightbox-caption").textContent = caption || "";
     lb.classList.remove("hidden");
+    lightboxRetried = false;
+    lightboxPath = path || null;
+    img.onerror = async () => {
+      if (lightboxRetried || !lightboxPath) return;
+      lightboxRetried = true;
+      // re-fetch fresh signed URL (cached one expired)
+      delete signedUrlCache?.[lightboxPath];
+      const fresh = await getSignedUrl(lightboxPath);
+      if (fresh) img.src = fresh;
+    };
   }
   function closePhotoLightbox() {
     const lb = $("#photo-lightbox");
@@ -667,21 +680,25 @@
 
   // ── Approve / Reject correction ──────────────────────────────────────────
   async function approveCorrection(id) {
+    const reqId = parseInt(id, 10);
+    if (!Number.isFinite(reqId)) { alert("ID inválido"); return; }
     const note = prompt("Nota opcional (visible al empleado):", "");
     if (note === null) return;
     showOverlay("Aprobando...");
     try {
-      const { data, error } = await sb.rpc("approve_correction", { p_req_id: parseInt(id), p_admin_note: note || null });
+      const { data, error } = await sb.rpc("approve_correction", { p_req_id: reqId, p_admin_note: note || null });
       if (error) throw error;
       await load();
     } catch (e) { alert("Error: " + e.message); } finally { hideOverlay(); }
   }
   async function rejectCorrection(id) {
+    const reqId = parseInt(id, 10);
+    if (!Number.isFinite(reqId)) { alert("ID inválido"); return; }
     const note = prompt("Razón del rechazo:", "");
     if (note === null) return;
     showOverlay("Rechazando...");
     try {
-      const { data, error } = await sb.rpc("reject_correction", { p_req_id: parseInt(id), p_admin_note: note || null });
+      const { data, error } = await sb.rpc("reject_correction", { p_req_id: reqId, p_admin_note: note || null });
       if (error) throw error;
       await load();
     } catch (e) { alert("Error: " + e.message); } finally { hideOverlay(); }
@@ -691,9 +708,9 @@
   async function openPhoto(linkEl) {
     const path = linkEl.dataset.path;
     if (!path) return;
-    if (path.startsWith("http")) { openPhotoLightbox(path, linkEl.dataset.caption || ""); return; }
+    if (path.startsWith("http")) { openPhotoLightbox(path, linkEl.dataset.caption || "", null); return; }
     const url = await getSignedUrl(path);
-    if (url) openPhotoLightbox(url, linkEl.dataset.caption || "");
+    if (url) openPhotoLightbox(url, linkEl.dataset.caption || "", path);
     else alert("No se pudo cargar la foto");
   }
 

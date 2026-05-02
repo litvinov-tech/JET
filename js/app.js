@@ -21,6 +21,8 @@ let parkMarkers = {};
 let activeTurno = null;     // current open shift {id, entrada_at, ini_descanso_at, ...}
 let timerHandle = null;     // setInterval id
 let signedUrlCache = {};    // path -> {url, exp}
+let actionInProgress = false; // anti-double-tap
+let gpsWatchId = null;        // navigator.geolocation watch handle
 
 window.JET = { sb, $, $$, CFG, getMe: () => me, getSignedUrl };
 
@@ -60,7 +62,7 @@ function fmtDateLocal(isoStr) {
 function dateOffset(days) {
   const d = new Date();
   d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
+  return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
 }
 function fmtSecs(secs) {
   if (!secs || secs < 0) return "00:00:00";
@@ -94,6 +96,7 @@ function showTabs() {
 function hideTabs() { $("#tabs").style.display = "none"; }
 function switchTab(name) {
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  if (name !== "empleado") stopGPSWatch();
   if (name === "empleado") enterMain();
   else if (name === "admin") {
     showView("#view-admin");
@@ -225,6 +228,7 @@ function showPending() {
 
 async function logoutAll() {
   stopTimer();
+  stopGPSWatch();
   await sb.auth.signOut();
   me = null;
   activeTurno = null;
@@ -271,9 +275,9 @@ async function enterMain() {
 async function loadEmpleadoSchedule() {
   if (!me || !me.empleadoId) return;
   try {
-    const fromIso = dateOffset(0); // hoy
+    const fromIso = dateOffset(0); // hoy en TZ correcta
     const to = new Date(); to.setDate(to.getDate() + 6);
-    const toIso = to.toISOString().slice(0, 10);
+    const toIso = to.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
     const { data } = await sb.from("shift_assignments")
       .select("fecha, status, hora_inicio, hora_fin, notas")
       .eq("empleado_id", me.empleadoId)
@@ -329,8 +333,13 @@ function renderWeekStrip(rows) {
     if (isToday) cls += " is-today";
     if (r) {
       cls += " is-" + r.status.replace("_","-");
-      if (r.status === "scheduled") statusTxt = `${r.hora_inicio?.slice(0,5) || ""}`;
-      else statusTxt = CFG.SHIFT_STATUS[r.status]?.icon || "";
+      if (r.status === "scheduled") {
+        const hi = r.hora_inicio?.slice(0,5) || "";
+        const hf = r.hora_fin?.slice(0,5) || "";
+        statusTxt = hf ? `${hi}<br>→${hf}` : hi;
+      } else {
+        statusTxt = CFG.SHIFT_STATUS[r.status]?.icon || "";
+      }
     }
     const cell = document.createElement("div");
     cell.className = cls;
@@ -367,7 +376,8 @@ function startGPSWatch() {
     $("#park-status").textContent = "GPS no disponible en este dispositivo";
     return;
   }
-  navigator.geolocation.watchPosition(
+  if (gpsWatchId !== null) return; // ya hay un watch activo
+  gpsWatchId = navigator.geolocation.watchPosition(
     pos => updateUserLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
     err => {
       $("#park-status").textContent = "Permite ubicación para continuar";
@@ -375,6 +385,12 @@ function startGPSWatch() {
     },
     { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
   );
+}
+function stopGPSWatch() {
+  if (gpsWatchId !== null) {
+    navigator.geolocation.clearWatch(gpsWatchId);
+    gpsWatchId = null;
+  }
 }
 
 function haversine(lat1, lng1, lat2, lng2) {
@@ -422,9 +438,13 @@ async function refreshActiveTurno() {
   try {
     const { data, error } = await sb.from("turnos")
       .select("*").eq("empleado_id", me.empleadoId).is("salida_at", null).is("deleted_at", null)
-      .order("entrada_at", { ascending: false }).limit(1).maybeSingle();
+      .order("entrada_at", { ascending: false });
     if (error) throw error;
-    activeTurno = data;
+    if (data && data.length > 1) {
+      console.warn("[JET] Multiple open shifts detected:", data.map(d => d.id));
+      toast("⚠ Múltiples turnos abiertos detectados. Contacta al admin.", "error");
+    }
+    activeTurno = data && data.length ? data[0] : null;
     renderShift();
     if (activeTurno) startTimer();
     else stopTimer();
@@ -550,6 +570,7 @@ function stopTimer() {
 
 // ── Action: GPS check → photo → RPC ─────────────────────────────────────────
 function triggerAction(action) {
+  if (actionInProgress) { toast("Espera... acción en progreso", "error"); return; }
   if (!currentGPS) { toast("Esperando ubicación... permite GPS", "error"); return; }
   if (!inSPGG(currentGPS.lat, currentGPS.lng)) {
     toast("Estás fuera de San Pedro Garza García", "error");
@@ -558,6 +579,7 @@ function triggerAction(action) {
   if (currentGPS.accuracy && currentGPS.accuracy > 200) {
     if (!confirm(`Tu GPS tiene baja precisión (±${Math.round(currentGPS.accuracy)}m). ¿Continuar?`)) return;
   }
+  actionInProgress = true;
   pendingAction = action;
   $("#photo-input").value = "";
   $("#photo-input").click();
@@ -565,25 +587,31 @@ function triggerAction(action) {
 
 $("#photo-input").addEventListener("change", async (e) => {
   const file = e.target.files[0];
-  if (!file) return;
-  if (!currentGPS || !nearestPark) { toast("GPS perdido", "error"); return; }
-  if (!pendingAction) return;
+  if (!file) { actionInProgress = false; return; }
+  if (!currentGPS || !nearestPark) { toast("GPS perdido", "error"); actionInProgress = false; return; }
+  if (!pendingAction) { actionInProgress = false; return; }
 
+  let uploadedPath = null;
   showOverlay("Comprimiendo foto...");
   try {
     const blob = await compressImageToBlob(file);
     if (!blob) throw new Error("Error al comprimir foto");
     showOverlay("Subiendo foto...");
-    const photoPath = await uploadPhoto(blob, pendingAction);
+    uploadedPath = await uploadPhoto(blob, pendingAction);
     showOverlay("Registrando...");
-    const result = await callRPC(pendingAction, photoPath, currentGPS, nearestPark.name);
+    const result = await callRPC(pendingAction, uploadedPath, currentGPS, nearestPark.name);
     toast(result.message, "success");
     await refreshActiveTurno();
   } catch (err) {
+    // Cleanup: si la foto subió pero el RPC falló, eliminamos la foto huérfana
+    if (uploadedPath) {
+      sb.storage.from("fotos").remove([uploadedPath]).catch(() => {});
+    }
     toast(err.message || String(err), "error");
   } finally {
     hideOverlay();
     pendingAction = null;
+    actionInProgress = false;
   }
 });
 

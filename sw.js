@@ -1,5 +1,5 @@
 "use strict";
-const CACHE = "jet-v11";
+const CACHE = "jet-v12";
 const ASSETS = [
   "./",
   "./index.html",
@@ -28,9 +28,25 @@ self.addEventListener("activate", e => {
 self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
-  // Network-first для Supabase API/Storage и любых cross-origin
+  // Network-first para Supabase API/Storage y cualquier cross-origin
   if (url.origin !== self.location.origin) return;
-  // Cache-first для собственных статических ассетов
+
+  // Network-first para HTML (index.html y "/") — siempre tomar la última versión cuando hay red
+  const isHtml = url.pathname.endsWith("/") || url.pathname.endsWith(".html");
+  if (isHtml) {
+    e.respondWith(
+      fetch(e.request).then(res => {
+        if (res.ok && res.type === "basic") {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => caches.match(e.request).then(hit => hit || caches.match("./index.html")))
+    );
+    return;
+  }
+
+  // Cache-first para assets estáticos (CSS/JS/iconos)
   e.respondWith(
     caches.match(e.request).then(hit => {
       if (hit) return hit;
