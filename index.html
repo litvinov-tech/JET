@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/styles.css?v=15">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -222,7 +222,10 @@
           <h2 class="admin-title">Panel de control</h2>
           <small id="admin-email-display" class="admin-subtitle">—</small>
         </div>
-        <button class="admin-refresh" id="btn-admin-refresh"><span>↻</span> Actualizar</button>
+        <div style="display:flex;gap:8px;">
+          <button class="admin-refresh" id="btn-force-update" title="Limpiar caché y recargar (si la app no se actualiza)" style="background:#fff8e1;color:#b07a00;border-color:#ffe49a;">🔄 Forzar update</button>
+          <button class="admin-refresh" id="btn-admin-refresh"><span>↻</span> Actualizar</button>
+        </div>
       </div>
 
       <!-- KPI cards -->
@@ -356,14 +359,36 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/config.js"></script>
-  <script src="js/app.js"></script>
-  <script src="js/admin.js"></script>
-  <script src="js/horarios.js"></script>
+  <script src="js/config.js?v=15"></script>
+  <script src="js/app.js?v=15"></script>
+  <script src="js/admin.js?v=15"></script>
+  <script src="js/horarios.js?v=15"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("sw.js").catch(err => console.warn("SW register failed:", err));
+        navigator.serviceWorker.register("sw.js").then(reg => {
+          // Detectar nueva versión del SW y avisar al usuario
+          reg.addEventListener("updatefound", () => {
+            const nw = reg.installing;
+            if (!nw) return;
+            nw.addEventListener("statechange", () => {
+              if (nw.state === "installed" && navigator.serviceWorker.controller) {
+                // Nueva versión está lista — forzamos reload para tomarla
+                console.log("[SW] Nueva versión detectada, recargando...");
+                nw.postMessage({ type: "SKIP_WAITING" });
+              }
+            });
+          });
+          // Comprobar updates al cargar la app
+          reg.update().catch(() => {});
+        }).catch(err => console.warn("SW register failed:", err));
+        // Cuando SW activo меняется → обновляем страницу
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (refreshing) return;
+          refreshing = true;
+          window.location.reload();
+        });
       });
     }
   </script>

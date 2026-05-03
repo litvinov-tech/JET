@@ -1,5 +1,10 @@
 "use strict";
-const CACHE = "jet-v14";
+const CACHE = "jet-v15";
+
+// Сообщение от клиента «активируй новую версию сразу» (без ожидания закрытия вкладки)
+self.addEventListener("message", e => {
+  if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
+});
 const ASSETS = [
   "./",
   "./index.html",

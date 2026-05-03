@@ -753,6 +753,21 @@
   // ── Bind ─────────────────────────────────────────────────────────────────
   document.addEventListener("DOMContentLoaded", () => {
     const r = $("#btn-admin-refresh"); if (r) r.addEventListener("click", load);
+    const fu = $("#btn-force-update");
+    if (fu) fu.addEventListener("click", async () => {
+      if (!confirm("Limpiar caché y recargar la app? Útil cuando empleados no ven los últimos cambios.")) return;
+      try {
+        if ("caches" in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map(k => caches.delete(k)));
+        }
+        if ("serviceWorker" in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map(r => r.unregister()));
+        }
+      } catch (e) { console.warn("Cache clear failed:", e); }
+      window.location.reload(true);
+    });
     $$(".period-tab").forEach(t => t.addEventListener("click", () => setPeriod(t.dataset.period)));
     const apply = $("#btn-period-apply"); if (apply) apply.addEventListener("click", applyCustomPeriod);
     const exp = $("#btn-export-csv"); if (exp) exp.addEventListener("click", exportCSV);
