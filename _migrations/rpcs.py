@@ -1,10 +1,14 @@
 """Apply RPC functions to Supabase Postgres."""
+import os
 import psycopg2
 
 conn = psycopg2.connect(
-    host="db.erdbgzxzmezlhgworfvt.supabase.co",
-    port=5432, database="postgres", user="postgres",
-    password="Wanton36.b.82", connect_timeout=20,
+    host=os.environ.get("SUPABASE_DB_HOST", "db.erdbgzxzmezlhgworfvt.supabase.co"),
+    port=int(os.environ.get("SUPABASE_DB_PORT", "5432")),
+    database=os.environ.get("SUPABASE_DB_NAME", "postgres"),
+    user=os.environ.get("SUPABASE_DB_USER", "postgres"),
+    password=os.environ["SUPABASE_DB_PASSWORD"],
+    connect_timeout=20,
 )
 conn.autocommit = True
 cur = conn.cursor()
@@ -39,7 +43,8 @@ as $$
 declare v_emp_id bigint; v_active_id bigint; v_new_id bigint;
 begin
   v_emp_id := public.my_empleado_id();
-  select id into v_active_id from public.turnos where empleado_id = v_emp_id and salida_at is null limit 1;
+  select id into v_active_id from public.turnos
+    where empleado_id = v_emp_id and salida_at is null and deleted_at is null limit 1;
   if v_active_id is not null then
     raise exception 'Ya tienes un turno activo. Ciérralo primero.';
   end if;
@@ -57,7 +62,7 @@ as $$
 declare v_emp_id bigint; v_turno record;
 begin
   v_emp_id := public.my_empleado_id();
-  select * into v_turno from public.turnos where empleado_id = v_emp_id and salida_at is null
+  select * into v_turno from public.turnos where empleado_id = v_emp_id and salida_at is null and deleted_at is null
                                                                     order by entrada_at desc limit 1;
   if v_turno is null then raise exception 'No hay turno activo'; end if;
   if v_turno.ini_descanso_at is not null then raise exception 'Descanso ya iniciado'; end if;
@@ -73,7 +78,7 @@ as $$
 declare v_emp_id bigint; v_turno record;
 begin
   v_emp_id := public.my_empleado_id();
-  select * into v_turno from public.turnos where empleado_id = v_emp_id and salida_at is null
+  select * into v_turno from public.turnos where empleado_id = v_emp_id and salida_at is null and deleted_at is null
                                                                     order by entrada_at desc limit 1;
   if v_turno is null then raise exception 'No hay turno activo'; end if;
   if v_turno.ini_descanso_at is null then raise exception 'No iniciaste descanso'; end if;
@@ -94,9 +99,12 @@ declare
   v_total_secs int; v_lunch_secs int; v_work_secs int;
 begin
   v_emp_id := public.my_empleado_id();
-  select * into v_turno from public.turnos where empleado_id = v_emp_id and salida_at is null
+  select * into v_turno from public.turnos where empleado_id = v_emp_id and salida_at is null and deleted_at is null
                                                                     order by entrada_at desc limit 1;
   if v_turno is null then raise exception 'No hay turno activo'; end if;
+  if v_turno.ini_descanso_at is not null and v_turno.fin_descanso_at is null then
+    raise exception 'Cierra el descanso antes de cerrar el turno';
+  end if;
   v_total_secs := extract(epoch from (v_now - v_turno.entrada_at))::int;
   if v_turno.ini_descanso_at is not null and v_turno.fin_descanso_at is not null then
     v_lunch_secs := extract(epoch from (v_turno.fin_descanso_at - v_turno.ini_descanso_at))::int;
@@ -120,11 +128,17 @@ create or replace function public.request_correction(
   p_proposed_time timestamptz, p_motivo text
 ) returns json language plpgsql security definer
 as $$
-declare v_emp_id bigint; v_req_id bigint;
+declare v_emp_id bigint; v_req_id bigint; v_turno_owner bigint;
 begin
   v_emp_id := public.my_empleado_id();
   if length(coalesce(p_motivo, '')) < 5 then
     raise exception 'Motivo demasiado corto (mín. 5 caracteres)';
+  end if;
+  if p_turno_id is not null then
+    select empleado_id into v_turno_owner from public.turnos where id = p_turno_id and deleted_at is null;
+    if v_turno_owner is null or v_turno_owner <> v_emp_id then
+      raise exception 'Turno inválido para este empleado';
+    end if;
   end if;
   insert into public.correction_requests
     (empleado_id, turno_id, fecha, tipo, field_name, proposed_time, motivo)
@@ -144,6 +158,11 @@ begin
   v_admin_email := auth.jwt() ->> 'email';
   select * into v_req from public.correction_requests where id = p_req_id and status = 'pending' for update;
   if v_req is null then raise exception 'Solicitud no encontrada o ya resuelta'; end if;
+
+  if v_req.field_name is not null and v_req.field_name not in
+     ('entrada_at','ini_descanso_at','fin_descanso_at','salida_at') then
+    raise exception 'Campo de corrección inválido';
+  end if;
 
   if v_req.turno_id is not null and v_req.field_name is not null and v_req.proposed_time is not null then
     execute format('update public.turnos set %I = $1, source = ''manual_correction'' where id = $2',

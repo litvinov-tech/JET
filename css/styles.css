@@ -1074,6 +1074,49 @@ h2 {
   min-width: 28px;
   height: 28px;
 }
+.work-analysis-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.work-analysis-kpis div {
+  background: #f7f9ff;
+  border: 1px solid #eef2ff;
+  border-radius: 8px;
+  padding: 10px;
+}
+.work-analysis-kpis span {
+  display: block;
+  color: var(--jet-gray);
+  font-size: 10px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.work-analysis-kpis strong {
+  color: var(--jet-dark);
+  font-variant-numeric: tabular-nums;
+}
+.work-analysis-table td,
+.work-analysis-table th {
+  white-space: nowrap;
+}
+.pos { color: var(--jet-ok); }
+.neg { color: var(--jet-danger); }
+.work-alerts {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: #7c2d12;
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 12px;
+  padding: 10px 12px;
+}
+.work-alerts strong {
+  display: block;
+  margin-bottom: 6px;
+}
 
 /* Role badges */
 .role-badge {

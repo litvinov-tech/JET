@@ -46,7 +46,7 @@
   // ── State ────────────────────────────────────────────────────────────────
   let cache = {
     empleados: [], pending: [], turnosToday: [],
-    periodTurnos: [], periodFrom: null, periodTo: null,
+    periodTurnos: [], periodAssignments: [], periodCorrections: [], periodFrom: null, periodTo: null,
     correctionsPending: [],
     admins: [],
   };
@@ -301,7 +301,14 @@
     try {
       const fromIso = cache.periodFrom + "T00:00:00";
       const toIso = cache.periodTo + "T23:59:59";
-      cache.periodTurnos = await fetchAllTurnos(fromIso, toIso);
+      const [turnos, assignments, corrections] = await Promise.all([
+        fetchAllTurnos(fromIso, toIso),
+        fetchAllAssignments(cache.periodFrom, cache.periodTo),
+        fetchAllCorrections(cache.periodFrom, cache.periodTo),
+      ]);
+      cache.periodTurnos = turnos;
+      cache.periodAssignments = assignments;
+      cache.periodCorrections = corrections;
       renderPeriod();
     } catch (e) {
       alert("Error: " + e.message);
@@ -320,6 +327,40 @@
         .gte("entrada_at", fromIso)
         .lte("entrada_at", toIso)
         .order("entrada_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    return rows;
+  }
+
+  async function fetchAllAssignments(fromDate, toDate) {
+    const pageSize = 1000;
+    const rows = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await sb.from("shift_assignments")
+        .select("*")
+        .gte("fecha", fromDate)
+        .lte("fecha", toDate)
+        .order("fecha", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    return rows;
+  }
+
+  async function fetchAllCorrections(fromDate, toDate) {
+    const pageSize = 1000;
+    const rows = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await sb.from("correction_requests")
+        .select("*")
+        .gte("fecha", fromDate)
+        .lte("fecha", toDate)
+        .order("fecha", { ascending: false })
         .range(from, from + pageSize - 1);
       if (error) throw error;
       rows.push(...(data || []));
@@ -480,6 +521,7 @@
     const sorted = Object.keys(empAgg).sort();
     if (!sorted.length) {
       byEmp.innerHTML = "<div class='empty'>Sin datos en este período</div>";
+      renderWorkAnalysis();
       renderPeriodHistory();
       return;
     }
@@ -501,8 +543,160 @@
     tbl.appendChild(tb);
     byEmp.appendChild(tbl);
 
+    renderWorkAnalysis();
     renderTopEmployees(empAgg);
     renderPeriodHistory();
+  }
+
+  function renderWorkAnalysis() {
+    const el = $("#work-analysis");
+    if (!el) return;
+    const turnos = cache.periodTurnos || [];
+    const assignments = cache.periodAssignments || [];
+    const corrections = cache.periodCorrections || [];
+    const today = todayStr();
+    const toleranceSecs = 10 * 60;
+    const actualByKey = {};
+    const byEmp = {};
+    const anomalies = [];
+
+    const ensureEmp = (empId) => {
+      const name = empMap[empId] || `(#${empId})`;
+      if (!byEmp[empId]) byEmp[empId] = {
+        name, scheduled: 0, actual: 0, turnos: 0, noShow: 0,
+        late: 0, early: 0, unscheduled: 0, issues: 0, corrections: 0,
+      };
+      return byEmp[empId];
+    };
+
+    turnos.forEach(t => {
+      const d = fmtDateLocal(t.entrada_at);
+      const key = `${t.empleado_id}|${d}`;
+      if (!actualByKey[key]) actualByKey[key] = { secs: 0, firstIn: null, lastOut: null, rows: [] };
+      const rec = actualByKey[key];
+      const secs = t.horas_trab_secs || 0;
+      rec.secs += secs;
+      rec.rows.push(t);
+      if (!rec.firstIn || new Date(t.entrada_at) < new Date(rec.firstIn)) rec.firstIn = t.entrada_at;
+      if (t.salida_at && (!rec.lastOut || new Date(t.salida_at) > new Date(rec.lastOut))) rec.lastOut = t.salida_at;
+      const emp = ensureEmp(t.empleado_id);
+      emp.actual += secs;
+      emp.turnos += 1;
+
+      const missingPhotos = ["foto_entrada", "foto_salida"].filter(k => !t[k]);
+      const missingGps = [];
+      if (!t.gps_entrada) missingGps.push("GPS entrada");
+      if (t.salida_at && !t.gps_salida) missingGps.push("GPS salida");
+      if (!t.salida_at) anomalies.push({ empId: t.empleado_id, text: `${d}: turno abierto desde ${fmtTimeShort(t.entrada_at)}` });
+      if (t.ini_descanso_at && !t.fin_descanso_at) anomalies.push({ empId: t.empleado_id, text: `${d}: descanso abierto` });
+      if (secs > 12 * 3600) anomalies.push({ empId: t.empleado_id, text: `${d}: jornada mayor a 12h (${fmtH(secs)})` });
+      if (secs < 0) anomalies.push({ empId: t.empleado_id, text: `${d}: horas negativas (${fmtH(secs)})` });
+      if (missingPhotos.length || missingGps.length) {
+        anomalies.push({ empId: t.empleado_id, text: `${d}: faltan ${[...missingPhotos, ...missingGps].join(", ")}` });
+      }
+    });
+
+    const scheduledKeys = new Set();
+    assignments.forEach(a => {
+      const emp = ensureEmp(a.empleado_id);
+      if (a.status !== "scheduled") return;
+      const key = `${a.empleado_id}|${a.fecha}`;
+      scheduledKeys.add(key);
+      const schedSecs = scheduleSecs(a.fecha, a.hora_inicio, a.hora_fin);
+      emp.scheduled += schedSecs;
+      const actual = actualByKey[key];
+      if (!actual || actual.secs <= 0) {
+        if (a.fecha < today) { emp.noShow += 1; anomalies.push({ empId: a.empleado_id, text: `${a.fecha}: no-show (${(a.hora_inicio || "").slice(0,5)}-${(a.hora_fin || "").slice(0,5)})` }); }
+        return;
+      }
+      const schedIn = dateTimeMs(a.fecha, a.hora_inicio);
+      const schedOut = dateTimeMs(a.fecha, a.hora_fin);
+      const firstIn = actual.firstIn ? new Date(actual.firstIn).getTime() : null;
+      const lastOut = actual.lastOut ? new Date(actual.lastOut).getTime() : null;
+      if (firstIn && schedIn && firstIn - schedIn > toleranceSecs * 1000) emp.late += 1;
+      if (lastOut && schedOut && schedOut - lastOut > toleranceSecs * 1000) emp.early += 1;
+    });
+
+    Object.entries(actualByKey).forEach(([key, rec]) => {
+      const [empId] = key.split("|");
+      if (!scheduledKeys.has(key)) ensureEmp(empId).unscheduled += rec.rows.length;
+    });
+    corrections.forEach(c => ensureEmp(c.empleado_id).corrections += 1);
+    anomalies.forEach(a => ensureEmp(a.empId).issues += 1);
+
+    const totalScheduled = Object.values(byEmp).reduce((s, e) => s + e.scheduled, 0);
+    const totalActual = Object.values(byEmp).reduce((s, e) => s + e.actual, 0);
+    const delta = totalActual - totalScheduled;
+    const totalNoShow = Object.values(byEmp).reduce((s, e) => s + e.noShow, 0);
+    const totalLate = Object.values(byEmp).reduce((s, e) => s + e.late, 0);
+    const totalEarly = Object.values(byEmp).reduce((s, e) => s + e.early, 0);
+    const totalIssues = anomalies.length;
+
+    const sorted = Object.values(byEmp)
+      .filter(e => e.scheduled || e.actual || e.noShow || e.issues || e.corrections)
+      .sort((a, b) => b.issues - a.issues || b.actual - a.actual || a.name.localeCompare(b.name));
+
+    el.innerHTML = `
+      <div class="work-analysis-kpis">
+        <div><span>Plan</span><strong>${fmtH(totalScheduled)}</strong></div>
+        <div><span>Real</span><strong>${fmtH(totalActual)}</strong></div>
+        <div><span>Diferencia</span><strong class="${delta < 0 ? "neg" : "pos"}">${delta < 0 ? "-" : "+"}${fmtH(Math.abs(delta))}</strong></div>
+        <div><span>No-show</span><strong>${totalNoShow}</strong></div>
+        <div><span>Retardos</span><strong>${totalLate}</strong></div>
+        <div><span>Salidas tempranas</span><strong>${totalEarly}</strong></div>
+        <div><span>Alertas</span><strong>${totalIssues}</strong></div>
+      </div>`;
+
+    if (!sorted.length) {
+      el.innerHTML += "<div class='empty'>Sin datos para análisis laboral</div>";
+      return;
+    }
+    const tbl = document.createElement("table");
+    tbl.className = "admin-table work-analysis-table";
+    tbl.innerHTML = "<thead><tr><th>Empleado</th><th>Plan</th><th>Real</th><th>Δ</th><th>Turnos</th><th>No-show</th><th>Retardos</th><th>Temprano</th><th>Sin plan</th><th>Correcciones</th><th>Alertas</th></tr></thead>";
+    const tb = document.createElement("tbody");
+    sorted.forEach(e => {
+      const d = e.actual - e.scheduled;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><strong>${escapeHtml(e.name)}</strong></td>
+        <td>${fmtH(e.scheduled)}</td>
+        <td>${fmtH(e.actual)}</td>
+        <td class="${d < 0 ? "neg" : "pos"}">${d < 0 ? "-" : "+"}${fmtH(Math.abs(d))}</td>
+        <td>${e.turnos}</td><td>${e.noShow}</td><td>${e.late}</td><td>${e.early}</td>
+        <td>${e.unscheduled}</td><td>${e.corrections}</td><td>${e.issues}</td>`;
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    el.appendChild(tbl);
+
+    if (anomalies.length) {
+      const box = document.createElement("div");
+      box.className = "work-alerts";
+      box.innerHTML = "<strong>Alertas principales</strong>";
+      anomalies.slice(0, 30).forEach(a => {
+        const div = document.createElement("div");
+        div.textContent = `${empMap[a.empId] || `#${a.empId}`}: ${a.text}`;
+        box.appendChild(div);
+      });
+      if (anomalies.length > 30) {
+        const more = document.createElement("div");
+        more.textContent = `... ${anomalies.length - 30} alertas más`;
+        box.appendChild(more);
+      }
+      el.appendChild(box);
+    }
+  }
+
+  function scheduleSecs(fecha, inicio, fin) {
+    const a = dateTimeMs(fecha, inicio), b = dateTimeMs(fecha, fin);
+    if (!a || !b) return 0;
+    return Math.max(0, Math.round(((b <= a ? b + 86400000 : b) - a) / 1000));
+  }
+
+  function dateTimeMs(fecha, hhmm) {
+    if (!fecha || !hhmm) return null;
+    return new Date(`${fecha}T${String(hhmm).slice(0,5)}:00`).getTime();
   }
 
   function renderPeriodHistory() {

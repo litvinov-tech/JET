@@ -1,9 +1,14 @@
 """Make storage private + add auto-cleanup of auth.users on empleado delete."""
+import os
 import psycopg2
 
 conn = psycopg2.connect(
-    host="db.erdbgzxzmezlhgworfvt.supabase.co", port=5432,
-    database="postgres", user="postgres", password="Wanton36.b.82", connect_timeout=20,
+    host=os.environ.get("SUPABASE_DB_HOST", "db.erdbgzxzmezlhgworfvt.supabase.co"),
+    port=int(os.environ.get("SUPABASE_DB_PORT", "5432")),
+    database=os.environ.get("SUPABASE_DB_NAME", "postgres"),
+    user=os.environ.get("SUPABASE_DB_USER", "postgres"),
+    password=os.environ["SUPABASE_DB_PASSWORD"],
+    connect_timeout=20,
 )
 conn.autocommit = True
 cur = conn.cursor()
