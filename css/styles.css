@@ -1059,6 +1059,21 @@ h2 {
 }
 .admin-table tr:hover td { background: #fafbff; }
 .admin-table tr:last-child td { border-bottom: none; }
+.admin-history-table td,
+.admin-history-table th {
+  white-space: nowrap;
+}
+#admin-history-list {
+  max-height: 520px;
+  overflow: auto;
+}
+#admin-history-list .photo-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+}
 
 /* Role badges */
 .role-badge {

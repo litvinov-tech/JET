@@ -318,6 +318,7 @@
               <button class="period-tab active" data-period="today">Hoy</button>
               <button class="period-tab" data-period="week">Semana</button>
               <button class="period-tab" data-period="month">Mes</button>
+              <button class="period-tab" data-period="all">Todo</button>
               <button class="period-tab" data-period="custom">Custom</button>
             </div>
             <div class="period-custom" id="period-custom" style="display:none;">
@@ -329,6 +330,12 @@
             <h4 class="subheader">Por empleado</h4>
             <div id="period-by-emp"></div>
             <button class="btn btn-secondary" id="btn-export-csv" style="margin-top:14px;">⬇ Descargar CSV</button>
+          </div>
+
+          <!-- Employee history with photos -->
+          <div class="card admin-card">
+            <h3 class="card-title">Historial completo con fotos <span id="admin-history-count" class="badge">0</span></h3>
+            <div id="admin-history-list"></div>
           </div>
 
           <!-- Today details -->

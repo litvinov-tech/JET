@@ -63,6 +63,7 @@
     if (p === "today") from = todayStr();
     else if (p === "week") from = getMondayStr();
     else if (p === "month") from = getMonthStartStr();
+    else if (p === "all") from = "2020-01-01";
     cache.periodFrom = from; cache.periodTo = to;
     loadPeriod();
   }
@@ -81,11 +82,12 @@
     showOverlay();
     try {
       const today = todayStr();
+      const tomorrow = (() => { const d = new Date(today + "T00:00:00"); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
       myEmail = (await sb.auth.getUser()).data.user?.email || null;
       const [pendingRes, activeRes, todayRes, corrRes, adminsRes] = await Promise.all([
         sb.from("empleados").select("id, nombre, email, telefono, created_at").eq("activo", false).order("created_at", { ascending: false }),
         sb.from("empleados").select("id, nombre, email, telefono, puesto").eq("activo", true).order("nombre"),
-        sb.from("turnos").select("*").is("deleted_at", null).gte("entrada_at", today + "T00:00:00").order("entrada_at", { ascending: true }),
+        sb.from("turnos").select("*").is("deleted_at", null).gte("entrada_at", today + "T00:00:00").lt("entrada_at", tomorrow + "T00:00:00").order("entrada_at", { ascending: true }),
         sb.from("correction_requests").select("*").eq("status", "pending").order("created_at", { ascending: true }),
         sb.from("admins").select("email, super, created_at").order("created_at", { ascending: true }),
       ]);
@@ -283,7 +285,6 @@
       if (lightboxRetried || !lightboxPath) return;
       lightboxRetried = true;
       // re-fetch fresh signed URL (cached one expired)
-      delete signedUrlCache?.[lightboxPath];
       const fresh = await getSignedUrl(lightboxPath);
       if (fresh) img.src = fresh;
     };
@@ -300,17 +301,31 @@
     try {
       const fromIso = cache.periodFrom + "T00:00:00";
       const toIso = cache.periodTo + "T23:59:59";
-      const { data, error } = await sb.from("turnos")
-        .select("*").is("deleted_at", null).gte("entrada_at", fromIso).lte("entrada_at", toIso)
-        .order("entrada_at", { ascending: false });
-      if (error) throw error;
-      cache.periodTurnos = data || [];
+      cache.periodTurnos = await fetchAllTurnos(fromIso, toIso);
       renderPeriod();
     } catch (e) {
       alert("Error: " + e.message);
     } finally {
       hideOverlay();
     }
+  }
+
+  async function fetchAllTurnos(fromIso, toIso) {
+    const pageSize = 1000;
+    const rows = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await sb.from("turnos")
+        .select("*")
+        .is("deleted_at", null)
+        .gte("entrada_at", fromIso)
+        .lte("entrada_at", toIso)
+        .order("entrada_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    return rows;
   }
 
   // ── Render: KPIs ─────────────────────────────────────────────────────────
@@ -402,26 +417,32 @@
     const tb = document.createElement("tbody");
     cache.turnosToday.forEach(r => {
       const empName = empMap[r.empleado_id] || `(#${r.empleado_id})`;
-      const photoSpec = [
-        ["foto_entrada", "▶", "Entrada"],
-        ["foto_ini_desc", "🍴", "Inicio descanso"],
-        ["foto_fin_desc", "↩", "Fin descanso"],
-        ["foto_salida", "⏹", "Salida"],
-      ];
-      const photosHtml = photoSpec
-        .filter(([k]) => r[k])
-        .map(([k, icon, label]) =>
-          `<a class="photo-link" data-path="${escapeHtml(r[k])}" data-caption="${escapeHtml(empName + " · " + label)}" href="#" onclick="window.JETAdmin.openPhoto(this); return false;">${icon}</a>`
-        ).join(" ");
+      const photosHtml = renderTurnoPhotoLinks(r, empName);
       const tr = document.createElement("tr");
       const delBtn = `<button class="btn-mini btn-mini-delete" data-action="del-turno" data-id="${r.id}" data-name="${escapeHtml(empName)}" data-time="${fmtTimeShort(r.entrada_at)}-${fmtTimeShort(r.salida_at) || "abierto"}" title="Eliminar turno">🗑</button>`;
       tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${r.horas_trab_secs ? fmtH(r.horas_trab_secs) : "—"}</td><td>${photosHtml}</td><td>${delBtn}</td>`;
       tb.appendChild(tr);
     });
-    list.querySelectorAll('[data-action="del-turno"]').forEach(b =>
-      b.addEventListener("click", () => promptDeleteTurno(b.dataset.id, b.dataset.name, b.dataset.time)));
     tbl.appendChild(tb);
     list.appendChild(tbl);
+    list.querySelectorAll('[data-action="del-turno"]').forEach(b =>
+      b.addEventListener("click", () => promptDeleteTurno(b.dataset.id, b.dataset.name, b.dataset.time)));
+  }
+
+  function renderTurnoPhotoLinks(r, empName) {
+    const photoSpec = [
+      ["foto_entrada", "▶", "Entrada"],
+      ["foto_ini_desc", "🍴", "Inicio descanso"],
+      ["foto_fin_desc", "↩", "Fin descanso"],
+      ["foto_salida", "⏹", "Salida"],
+    ];
+    const html = photoSpec
+      .filter(([k]) => r[k])
+      .map(([k, icon, label]) => {
+        const caption = `${empName} · ${fmtDateLocal(r.entrada_at)} · ${label}`;
+        return `<a class="photo-link" data-path="${escapeHtml(r[k])}" data-caption="${escapeHtml(caption)}" href="#" onclick="window.JETAdmin.openPhoto(this); return false;">${icon}</a>`;
+      }).join(" ");
+    return html || "<span class='muted'>—</span>";
   }
 
   // ── Render: Period summary ───────────────────────────────────────────────
@@ -459,6 +480,7 @@
     const sorted = Object.keys(empAgg).sort();
     if (!sorted.length) {
       byEmp.innerHTML = "<div class='empty'>Sin datos en este período</div>";
+      renderPeriodHistory();
       return;
     }
     const tbl = document.createElement("table");
@@ -480,6 +502,42 @@
     byEmp.appendChild(tbl);
 
     renderTopEmployees(empAgg);
+    renderPeriodHistory();
+  }
+
+  function renderPeriodHistory() {
+    const count = $("#admin-history-count");
+    const list = $("#admin-history-list");
+    if (!list) return;
+    const rows = cache.periodTurnos || [];
+    if (count) count.textContent = rows.length;
+    list.innerHTML = "";
+    if (!rows.length) {
+      list.innerHTML = "<div class='empty'>Sin historial en este período</div>";
+      return;
+    }
+
+    const tbl = document.createElement("table");
+    tbl.className = "admin-table admin-history-table";
+    tbl.innerHTML = "<thead><tr><th>Fecha</th><th>Empleado</th><th>Punto</th><th>Entrada</th><th>Descanso</th><th>Salida</th><th>Horas</th><th>Fotos</th></tr></thead>";
+    const tb = document.createElement("tbody");
+    rows.forEach(r => {
+      const empName = empMap[r.empleado_id] || `(#${r.empleado_id})`;
+      const lunch = `${fmtTimeShort(r.ini_descanso_at)} - ${fmtTimeShort(r.fin_descanso_at)}`;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${fmtDateLocal(r.entrada_at)}</td>
+        <td><strong>${escapeHtml(empName)}</strong></td>
+        <td>${escapeHtml(r.punto || "")}</td>
+        <td>${fmtTimeShort(r.entrada_at)}</td>
+        <td>${lunch}</td>
+        <td>${fmtTimeShort(r.salida_at)}</td>
+        <td>${r.horas_trab_secs ? fmtH(r.horas_trab_secs) : "—"}</td>
+        <td>${renderTurnoPhotoLinks(r, empName)}</td>`;
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    list.appendChild(tbl);
   }
 
   // ── Render: Active employees agrupados por tier ──────────────────────────
