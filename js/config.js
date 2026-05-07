@@ -22,11 +22,24 @@ window.JET_CONFIG = {
 
   // Puestos (roles) de los empleados
   ROLES: {
-    conductor:        { label: "Conductor",        icon: "🚗", color: "#005bff", bg: "#e3edff", tier: "linea"   },
-    asist_logistica:  { label: "Asist. Logística", icon: "📦", color: "#7b1fa2", bg: "#f3e5f5", tier: "linea"   },
-    seguridad:        { label: "Seguridad",        icon: "🛡", color: "#00875a", bg: "#e3f7e8", tier: "linea"   },
-    senior_grupo:     { label: "Senior de grupo",  icon: "⭐", color: "#b07a00", bg: "#fff3cd", tier: "senior"  },
-    manager:          { label: "Manager",          icon: "🎯", color: "#c62828", bg: "#fde8e8", tier: "manager" },
+    conductor:        { label: "Conductor",        icon: "🚗", color: "#005bff", bg: "#e3edff", tier: "linea",   hourlyRate: 0 },
+    asist_logistica:  { label: "Asist. Logística", icon: "📦", color: "#7b1fa2", bg: "#f3e5f5", tier: "linea",   hourlyRate: 0 },
+    seguridad:        { label: "Seguridad",        icon: "🛡", color: "#00875a", bg: "#e3f7e8", tier: "linea",   hourlyRate: 0 },
+    senior_grupo:     { label: "Senior de grupo",  icon: "⭐", color: "#b07a00", bg: "#fff3cd", tier: "senior",  hourlyRate: 0 },
+    manager:          { label: "Manager",          icon: "🎯", color: "#c62828", bg: "#fde8e8", tier: "manager", hourlyRate: 0 },
+  },
+
+  // Reglas configurables para nómina. Ajusta las tarifas reales antes de usar pago estimado.
+  PAYROLL: {
+    defaultHourlyRate: 0,
+    dailyRegularHours: 8,
+    weeklyRegularHours: 48,
+    overtimeFirstWeeklyHours: 9,
+    overtimeDoubleMultiplier: 2,
+    overtimeTripleMultiplier: 3,
+    sundayPremiumPct: 25,
+    nightStart: "20:00",
+    nightEnd: "06:00",
   },
 
   // Tiers — para agrupar empleados en cards separadas

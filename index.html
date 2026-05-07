@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="css/styles.css?v=17">
+  <link rel="stylesheet" href="css/styles.css?v=18">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -331,7 +331,10 @@
             <div id="work-analysis"></div>
             <h4 class="subheader">Por empleado</h4>
             <div id="period-by-emp"></div>
-            <button class="btn btn-secondary" id="btn-export-csv" style="margin-top:14px;">⬇ Descargar CSV</button>
+            <div class="export-actions">
+              <button class="btn btn-secondary" id="btn-export-csv">⬇ Descargar CSV</button>
+              <button class="btn btn-secondary" id="btn-export-payroll">💵 Descargar nómina</button>
+            </div>
           </div>
 
           <!-- Employee history with photos -->
@@ -368,10 +371,10 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/config.js?v=17"></script>
-  <script src="js/app.js?v=17"></script>
-  <script src="js/admin.js?v=17"></script>
-  <script src="js/horarios.js?v=17"></script>
+  <script src="js/config.js?v=18"></script>
+  <script src="js/app.js?v=18"></script>
+  <script src="js/admin.js?v=18"></script>
+  <script src="js/horarios.js?v=18"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

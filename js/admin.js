@@ -52,6 +52,7 @@
   };
   let empMap = {}; // empleado_id -> nombre
   let myEmail = null;
+  let workManualLang = "es";
 
   // ── Period selection ─────────────────────────────────────────────────────
   function setPeriod(p) {
@@ -563,7 +564,7 @@
     const ensureEmp = (empId) => {
       const name = empMap[empId] || `(#${empId})`;
       if (!byEmp[empId]) byEmp[empId] = {
-        name, scheduled: 0, actual: 0, turnos: 0, noShow: 0,
+        empId, name, scheduled: 0, actual: 0, turnos: 0, noShow: 0,
         late: 0, early: 0, unscheduled: 0, issues: 0, corrections: 0,
       };
       return byEmp[empId];
@@ -631,6 +632,13 @@
     const totalLate = Object.values(byEmp).reduce((s, e) => s + e.late, 0);
     const totalEarly = Object.values(byEmp).reduce((s, e) => s + e.early, 0);
     const totalIssues = anomalies.length;
+    const payrollRows = buildPayrollRows(byEmp);
+    const payrollByEmp = {};
+    payrollRows.forEach(r => payrollByEmp[r.empId] = r);
+    const totalPay = payrollRows.reduce((s, r) => s + r.estimatedPay, 0);
+    const totalOvertime = payrollRows.reduce((s, r) => s + r.overtimeSecs, 0);
+    const totalSunday = payrollRows.reduce((s, r) => s + r.sundaySecs, 0);
+    const totalNight = payrollRows.reduce((s, r) => s + r.nightSecs, 0);
 
     const sorted = Object.values(byEmp)
       .filter(e => e.scheduled || e.actual || e.noShow || e.issues || e.corrections)
@@ -644,8 +652,13 @@
         <div><span>No-show</span><strong>${totalNoShow}</strong></div>
         <div><span>Retardos</span><strong>${totalLate}</strong></div>
         <div><span>Salidas tempranas</span><strong>${totalEarly}</strong></div>
+        <div><span>Extra</span><strong>${fmtH(totalOvertime)}</strong></div>
+        <div><span>Nocturnas</span><strong>${fmtH(totalNight)}</strong></div>
+        <div><span>Domingo</span><strong>${fmtH(totalSunday)}</strong></div>
+        <div><span>Nómina estimada</span><strong>${money(totalPay)}</strong></div>
         <div><span>Alertas</span><strong>${totalIssues}</strong></div>
-      </div>`;
+      </div>
+      ${renderWorkManual()}`;
 
     if (!sorted.length) {
       el.innerHTML += "<div class='empty'>Sin datos para análisis laboral</div>";
@@ -653,22 +666,31 @@
     }
     const tbl = document.createElement("table");
     tbl.className = "admin-table work-analysis-table";
-    tbl.innerHTML = "<thead><tr><th>Empleado</th><th>Plan</th><th>Real</th><th>Δ</th><th>Turnos</th><th>No-show</th><th>Retardos</th><th>Temprano</th><th>Sin plan</th><th>Correcciones</th><th>Alertas</th></tr></thead>";
+    tbl.innerHTML = "<thead><tr><th>Empleado</th><th>Plan</th><th>Real</th><th>Δ</th><th>Extra</th><th>Noct.</th><th>Dom.</th><th>Tarifa</th><th>Pago est.</th><th>Turnos</th><th>No-show</th><th>Retardos</th><th>Temprano</th><th>Sin plan</th><th>Correcciones</th><th>Alertas</th></tr></thead>";
     const tb = document.createElement("tbody");
     sorted.forEach(e => {
       const d = e.actual - e.scheduled;
+      const pay = payrollByEmp[e.empId] || {};
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td><strong>${escapeHtml(e.name)}</strong></td>
         <td>${fmtH(e.scheduled)}</td>
         <td>${fmtH(e.actual)}</td>
         <td class="${d < 0 ? "neg" : "pos"}">${d < 0 ? "-" : "+"}${fmtH(Math.abs(d))}</td>
+        <td>${fmtH(pay.overtimeSecs || 0)}</td>
+        <td>${fmtH(pay.nightSecs || 0)}</td>
+        <td>${fmtH(pay.sundaySecs || 0)}</td>
+        <td>${money(pay.hourlyRate || 0)}</td>
+        <td><strong>${money(pay.estimatedPay || 0)}</strong></td>
         <td>${e.turnos}</td><td>${e.noShow}</td><td>${e.late}</td><td>${e.early}</td>
         <td>${e.unscheduled}</td><td>${e.corrections}</td><td>${e.issues}</td>`;
       tb.appendChild(tr);
     });
     tbl.appendChild(tb);
-    el.appendChild(tbl);
+    const wrap = document.createElement("div");
+    wrap.className = "table-scroll";
+    wrap.appendChild(tbl);
+    el.appendChild(wrap);
 
     if (anomalies.length) {
       const box = document.createElement("div");
@@ -688,6 +710,55 @@
     }
   }
 
+  function renderWorkManual() {
+    const es = workManualLang === "es";
+    const items = es ? [
+      ["Plan", "Horas programadas en Horarios para el período seleccionado."],
+      ["Real", "Horas realmente trabajadas según entrada, salida y descanso."],
+      ["Δ", "Diferencia entre Real y Plan. Negativo = faltaron horas; positivo = trabajó más."],
+      ["Extra", "Horas por encima de las reglas configuradas en PAYROLL."],
+      ["Noct.", "Horas trabajadas dentro de la ventana nocturna configurada."],
+      ["Dom.", "Horas trabajadas en domingo; se suma prima dominical estimada."],
+      ["Tarifa", "Tarifa por hora del puesto. Ahora está en 0 hasta capturar valores reales."],
+      ["Pago est.", "Estimación: regular + extra doble/triple + prima dominical. No es recibo legal."],
+      ["No-show", "Día programado pasado sin turno trabajado."],
+      ["Retardos", "Entrada más de 10 minutos tarde contra horario programado."],
+      ["Temprano", "Salida más de 10 minutos antes del horario programado."],
+      ["Sin plan", "Turno trabajado sin día programado en Horarios."],
+      ["Alertas", "Problemas para revisar: turno abierto, descanso abierto, faltan fotos/GPS, jornada anómala."],
+    ] : [
+      ["Plan", "Запланированные часы из Horarios за выбранный период."],
+      ["Real", "Фактически отработанные часы по entrada, salida и descanso."],
+      ["Δ", "Разница Real - Plan. Минус = недоработка, плюс = переработка."],
+      ["Extra", "Сверхурочные часы по правилам PAYROLL."],
+      ["Noct.", "Часы в ночном окне, заданном в настройках."],
+      ["Dom.", "Часы в воскресенье; добавляется расчетная воскресная премия."],
+      ["Tarifa", "Почасовая ставка роли. Сейчас 0, пока не внесены реальные ставки."],
+      ["Pago est.", "Оценка оплаты: обычные + двойные/тройные extra + воскресная премия. Не юридический расчет."],
+      ["No-show", "Прошедший запланированный день без фактической смены."],
+      ["Retardos", "Опоздание больше 10 минут относительно плана."],
+      ["Temprano", "Уход больше чем на 10 минут раньше плана."],
+      ["Sin plan", "Смена была, но в Horarios не было плана."],
+      ["Alertas", "Что проверить: открытая смена/перерыв, нет фото/GPS, аномальная jornada."],
+    ];
+    return `
+      <div class="work-manual">
+        <div class="work-manual-head">
+          <strong>${es ? "Manual de lectura" : "Инструкция к отчету"}</strong>
+          <span>
+            <button class="${es ? "active" : ""}" onclick="window.JETAdmin.setWorkManualLang('es')">ES</button>
+            <button class="${!es ? "active" : ""}" onclick="window.JETAdmin.setWorkManualLang('ru')">RU</button>
+          </span>
+        </div>
+        ${items.map(([k, v]) => `<div><b>${escapeHtml(k)}</b><span>${escapeHtml(v)}</span></div>`).join("")}
+      </div>`;
+  }
+
+  function setWorkManualLang(lang) {
+    workManualLang = lang === "ru" ? "ru" : "es";
+    renderWorkAnalysis();
+  }
+
   function scheduleSecs(fecha, inicio, fin) {
     const a = dateTimeMs(fecha, inicio), b = dateTimeMs(fecha, fin);
     if (!a || !b) return 0;
@@ -698,6 +769,89 @@
     if (!fecha || !hhmm) return null;
     return new Date(`${fecha}T${String(hhmm).slice(0,5)}:00`).getTime();
   }
+
+  function buildPayrollRows(byEmp) {
+    const rules = CFG.PAYROLL || {};
+    const dailyRegularSecs = (rules.dailyRegularHours || 8) * 3600;
+    const weeklyRegularSecs = (rules.weeklyRegularHours || 48) * 3600;
+    const doubleCapSecs = (rules.overtimeFirstWeeklyHours || 9) * 3600;
+    const rows = Object.values(byEmp).map(e => {
+      const profile = cache.empleados.find(x => String(x.id) === String(e.empId)) || {};
+      const role = CFG.ROLES?.[profile.puesto] || {};
+      const hourlyRate = Number(role.hourlyRate ?? rules.defaultHourlyRate ?? 0) || 0;
+      const workedByDate = {};
+      (cache.periodTurnos || [])
+        .filter(t => String(t.empleado_id) === String(e.empId))
+        .forEach(t => {
+          const d = fmtDateLocal(t.entrada_at);
+          if (!workedByDate[d]) workedByDate[d] = 0;
+          workedByDate[d] += t.horas_trab_secs || 0;
+        });
+
+      let dailyOvertimeSecs = 0;
+      Object.values(workedByDate).forEach(secs => {
+        dailyOvertimeSecs += Math.max(0, secs - dailyRegularSecs);
+      });
+      const weeklyOvertimeSecs = Math.max(0, e.actual - weeklyRegularSecs);
+      const overtimeSecs = Math.max(dailyOvertimeSecs, weeklyOvertimeSecs);
+      const regularSecs = Math.max(0, e.actual - overtimeSecs);
+      const doubleSecs = Math.min(overtimeSecs, doubleCapSecs);
+      const tripleSecs = Math.max(0, overtimeSecs - doubleSecs);
+      const sundaySecs = sumSundaySecs(e.empId);
+      const nightSecs = sumNightSecs(e.empId);
+      const regularPay = hours(regularSecs) * hourlyRate;
+      const overtimePay =
+        hours(doubleSecs) * hourlyRate * (rules.overtimeDoubleMultiplier || 2) +
+        hours(tripleSecs) * hourlyRate * (rules.overtimeTripleMultiplier || 3);
+      const sundayPay = hours(sundaySecs) * hourlyRate * ((rules.sundayPremiumPct || 0) / 100);
+      const estimatedPay = regularPay + overtimePay + sundayPay;
+      return {
+        empId: e.empId, name: e.name, role: role.label || profile.puesto || "",
+        hourlyRate, scheduledSecs: e.scheduled, actualSecs: e.actual,
+        regularSecs, overtimeSecs, doubleSecs, tripleSecs, nightSecs, sundaySecs,
+        noShow: e.noShow, late: e.late, early: e.early, unscheduled: e.unscheduled,
+        corrections: e.corrections, issues: e.issues, estimatedPay,
+      };
+    });
+    return rows.sort((a, b) => b.estimatedPay - a.estimatedPay || a.name.localeCompare(b.name));
+  }
+
+  function sumSundaySecs(empId) {
+    return (cache.periodTurnos || [])
+      .filter(t => String(t.empleado_id) === String(empId))
+      .reduce((s, t) => {
+        const day = new Date(t.entrada_at).toLocaleDateString("en-US", { weekday: "short", timeZone: CFG.TIMEZONE });
+        return s + (day === "Sun" ? (t.horas_trab_secs || 0) : 0);
+      }, 0);
+  }
+
+  function sumNightSecs(empId) {
+    const rules = CFG.PAYROLL || {};
+    const start = rules.nightStart || "20:00";
+    const end = rules.nightEnd || "06:00";
+    return (cache.periodTurnos || [])
+      .filter(t => String(t.empleado_id) === String(empId))
+      .reduce((s, t) => s + overlapWindowSecs(t.entrada_at, t.salida_at, start, end), 0);
+  }
+
+  function overlapWindowSecs(startIso, endIso, winStart, winEnd) {
+    if (!startIso || !endIso) return 0;
+    const start = new Date(startIso);
+    const end = new Date(endIso);
+    if (!(end > start)) return 0;
+    let total = 0;
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const day = d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
+      const a = new Date(`${day}T${winStart}:00`);
+      let b = new Date(`${day}T${winEnd}:00`);
+      if (b <= a) b = new Date(b.getTime() + 86400000);
+      total += Math.max(0, Math.min(end.getTime(), b.getTime()) - Math.max(start.getTime(), a.getTime())) / 1000;
+    }
+    return Math.round(total);
+  }
+
+  function hours(secs) { return (secs || 0) / 3600; }
+  function money(n) { return "$" + Number(n || 0).toFixed(2); }
 
   function renderPeriodHistory() {
     const count = $("#admin-history-count");
@@ -1002,6 +1156,82 @@
     URL.revokeObjectURL(url);
   }
 
+  function exportPayrollCSV() {
+    if (!cache.periodTurnos.length && !cache.periodAssignments.length) { alert("No hay datos para exportar"); return; }
+    const byEmp = {};
+    const ensure = (empId) => {
+      const name = empMap[empId] || `#${empId}`;
+      if (!byEmp[empId]) byEmp[empId] = {
+        empId, name, scheduled: 0, actual: 0, turnos: 0, noShow: 0,
+        late: 0, early: 0, unscheduled: 0, issues: 0, corrections: 0,
+      };
+      return byEmp[empId];
+    };
+    const actualByKey = {};
+    (cache.periodTurnos || []).forEach(t => {
+      const d = fmtDateLocal(t.entrada_at);
+      const key = `${t.empleado_id}|${d}`;
+      if (!actualByKey[key]) actualByKey[key] = { secs: 0, firstIn: null, lastOut: null, rows: [] };
+      actualByKey[key].secs += t.horas_trab_secs || 0;
+      actualByKey[key].rows.push(t);
+      if (!actualByKey[key].firstIn || new Date(t.entrada_at) < new Date(actualByKey[key].firstIn)) actualByKey[key].firstIn = t.entrada_at;
+      if (t.salida_at && (!actualByKey[key].lastOut || new Date(t.salida_at) > new Date(actualByKey[key].lastOut))) actualByKey[key].lastOut = t.salida_at;
+      const emp = ensure(t.empleado_id);
+      emp.actual += t.horas_trab_secs || 0;
+      emp.turnos += 1;
+    });
+    const scheduledKeys = new Set();
+    (cache.periodAssignments || []).forEach(a => {
+      const emp = ensure(a.empleado_id);
+      if (a.status !== "scheduled") return;
+      const key = `${a.empleado_id}|${a.fecha}`;
+      scheduledKeys.add(key);
+      emp.scheduled += scheduleSecs(a.fecha, a.hora_inicio, a.hora_fin);
+      if (!actualByKey[key]?.secs && a.fecha < todayStr()) emp.noShow += 1;
+      const schedIn = dateTimeMs(a.fecha, a.hora_inicio);
+      const schedOut = dateTimeMs(a.fecha, a.hora_fin);
+      const firstIn = actualByKey[key]?.firstIn ? new Date(actualByKey[key].firstIn).getTime() : null;
+      const lastOut = actualByKey[key]?.lastOut ? new Date(actualByKey[key].lastOut).getTime() : null;
+      if (firstIn && schedIn && firstIn - schedIn > 10 * 60 * 1000) emp.late += 1;
+      if (lastOut && schedOut && schedOut - lastOut > 10 * 60 * 1000) emp.early += 1;
+    });
+    Object.entries(actualByKey).forEach(([key, rec]) => {
+      const [empId] = key.split("|");
+      if (!scheduledKeys.has(key)) ensure(empId).unscheduled += rec.rows.length;
+    });
+    (cache.periodCorrections || []).forEach(c => ensure(c.empleado_id).corrections += 1);
+
+    const rows = buildPayrollRows(byEmp);
+    const headers = ["Empleado","Puesto","Plan","Real","Diferencia","Regular","Extra doble","Extra triple","Nocturnas","Domingo","Tarifa hora","Pago estimado","Turnos","No-show","Retardos","Salidas tempranas","Sin plan","Correcciones","Alertas"];
+    const csvRows = rows.map(r => [
+      r.name, r.role, fmtH(r.scheduledSecs), fmtH(r.actualSecs), fmtSignedH(r.actualSecs - r.scheduledSecs),
+      fmtH(r.regularSecs), fmtH(r.doubleSecs), fmtH(r.tripleSecs), fmtH(r.nightSecs), fmtH(r.sundaySecs),
+      money(r.hourlyRate), money(r.estimatedPay), r.turnos, r.noShow, r.late, r.early, r.unscheduled, r.corrections, r.issues,
+    ]);
+    downloadCSV(`JET_nomina_${cache.periodFrom}_${cache.periodTo}.csv`, [headers, ...csvRows]);
+  }
+
+  function fmtSignedH(secs) {
+    const sign = secs < 0 ? "-" : "+";
+    return sign + fmtH(Math.abs(secs || 0));
+  }
+
+  function downloadCSV(filename, rows) {
+    const csv = rows.map(row =>
+      row.map(cell => {
+        const s = String(cell ?? "");
+        return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      }).join(";")
+    ).join("\r\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   // ── Bind ─────────────────────────────────────────────────────────────────
   document.addEventListener("DOMContentLoaded", () => {
     const r = $("#btn-admin-refresh"); if (r) r.addEventListener("click", load);
@@ -1023,6 +1253,7 @@
     $$(".period-tab").forEach(t => t.addEventListener("click", () => setPeriod(t.dataset.period)));
     const apply = $("#btn-period-apply"); if (apply) apply.addEventListener("click", applyCustomPeriod);
     const exp = $("#btn-export-csv"); if (exp) exp.addEventListener("click", exportCSV);
+    const expPayroll = $("#btn-export-payroll"); if (expPayroll) expPayroll.addEventListener("click", exportPayrollCSV);
     const fromIn = $("#period-from"); if (fromIn) fromIn.value = dateOffset(7);
     const toIn = $("#period-to"); if (toIn) toIn.value = todayStr();
     const lbClose = $("#lightbox-close"); if (lbClose) lbClose.addEventListener("click", closePhotoLightbox);
@@ -1035,5 +1266,5 @@
     if (newAdminInput) newAdminInput.addEventListener("keydown", e => { if (e.key === "Enter") addAdmin(e.target.value); });
   });
 
-  window.JETAdmin = { load, openPhoto, renderRoleBadge, getEmpleados: () => cache.empleados, getMyEmail: () => myEmail };
+  window.JETAdmin = { load, openPhoto, renderRoleBadge, setWorkManualLang, getEmpleados: () => cache.empleados, getMyEmail: () => myEmail };
 })();
