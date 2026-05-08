@@ -1,5 +1,5 @@
 "use strict";
-const CACHE = "jet-v19";
+const CACHE = "jet-v20";
 
 // Сообщение от клиента «активируй новую версию сразу» (без ожидания закрытия вкладки)
 self.addEventListener("message", e => {

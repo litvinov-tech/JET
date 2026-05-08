@@ -1152,6 +1152,7 @@
   function exportCSV() {
     if (!cache.periodTurnos.length) { alert("No hay datos para exportar"); return; }
     const headers = ["Fecha","Empleado","Punto","Entrada","Inicio descanso","Fin descanso","Salida","Horas comida","Horas trabajadas","GPS entrada","GPS salida","Origen"];
+    const empSummary = {};
     const rows = cache.periodTurnos.map(r => [
       fmtDateLocal(r.entrada_at),
       empMap[r.empleado_id] || `#${r.empleado_id}`,
@@ -1163,9 +1164,33 @@
       r.gps_entrada || "", r.gps_salida || "",
       r.source || "app",
     ]);
+    cache.periodTurnos.forEach(r => {
+      const empId = String(r.empleado_id);
+      const empName = empMap[r.empleado_id] || `#${r.empleado_id}`;
+      const day = fmtDateLocal(r.entrada_at);
+      if (!empSummary[empId]) empSummary[empId] = { name: empName, days: {}, shifts: 0, totalSecs: 0 };
+      empSummary[empId].shifts += 1;
+      empSummary[empId].totalSecs += r.horas_trab_secs || 0;
+      empSummary[empId].days[day] = (empSummary[empId].days[day] || 0) + (r.horas_trab_secs || 0);
+    });
     const totalSec = cache.periodTurnos.reduce((s, r) => s + (r.horas_trab_secs || 0), 0);
     rows.push([]);
     rows.push(["TOTAL", "", "", "", "", "", "", "", fmtH(totalSec), "", "", ""]);
+    rows.push([]);
+    rows.push(["RESUMEN POR EMPLEADO"]);
+    rows.push(["Empleado","Dias trabajados","Dias y tiempo trabajado","Turnos","Tiempo total"]);
+    Object.values(empSummary)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach(emp => {
+        const dayEntries = Object.entries(emp.days).sort(([a], [b]) => a.localeCompare(b));
+        rows.push([
+          emp.name,
+          dayEntries.length,
+          dayEntries.map(([day, secs]) => `${day}: ${fmtH(secs)}`).join(" | "),
+          emp.shifts,
+          fmtH(emp.totalSecs),
+        ]);
+      });
 
     const csv = [headers, ...rows].map(row =>
       row.map(cell => {
