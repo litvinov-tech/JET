@@ -18,6 +18,34 @@
     d.setDate(1);
     return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
   }
+  function addDateStr(dateStr, days) {
+    const d = new Date(dateStr + "T12:00:00Z");
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+  function tzOffsetMs(date) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: CFG.TIMEZONE, hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).formatToParts(date).reduce((a, p) => { a[p.type] = p.value; return a; }, {});
+    const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+    return asUtc - date.getTime();
+  }
+  function zonedTimeToUtcIso(dateStr, timeStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const [hh, mm, ss = 0] = timeStr.split(":").map(Number);
+    const wallAsUtc = Date.UTC(y, m - 1, d, hh, mm, ss);
+    let utc = new Date(wallAsUtc - tzOffsetMs(new Date(wallAsUtc)));
+    utc = new Date(wallAsUtc - tzOffsetMs(utc));
+    return utc.toISOString();
+  }
+  function dayBoundsUtc(dateStr) {
+    return {
+      from: zonedTimeToUtcIso(dateStr, "00:00:00"),
+      to: zonedTimeToUtcIso(addDateStr(dateStr, 1), "00:00:00"),
+    };
+  }
   function fmtH(secs) {
     if (!secs || secs < 0) return "0h 00m";
     const h = Math.floor(secs / 3600);
@@ -83,12 +111,12 @@
     showOverlay();
     try {
       const today = todayStr();
-      const tomorrow = (() => { const d = new Date(today + "T00:00:00"); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+      const todayBounds = dayBoundsUtc(today);
       myEmail = (await sb.auth.getUser()).data.user?.email || null;
       const [pendingRes, activeRes, todayRes, corrRes, adminsRes] = await Promise.all([
         sb.from("empleados").select("id, nombre, email, telefono, created_at").eq("activo", false).order("created_at", { ascending: false }),
         sb.from("empleados").select("id, nombre, email, telefono, puesto").eq("activo", true).order("nombre"),
-        sb.from("turnos").select("*").is("deleted_at", null).gte("entrada_at", today + "T00:00:00").lt("entrada_at", tomorrow + "T00:00:00").order("entrada_at", { ascending: true }),
+        sb.from("turnos").select("*").is("deleted_at", null).gte("entrada_at", todayBounds.from).lt("entrada_at", todayBounds.to).order("entrada_at", { ascending: true }),
         sb.from("correction_requests").select("*").eq("status", "pending").order("created_at", { ascending: true }),
         sb.from("admins").select("email, super, created_at").order("created_at", { ascending: true }),
       ]);
@@ -197,13 +225,13 @@
 
   // ── Hours chart (last 7 days) ────────────────────────────────────────────
   async function loadHoursChart() {
-    const fromIso = dateOffset(6) + "T00:00:00";
-    const toIso = todayStr() + "T23:59:59";
+    const fromIso = dayBoundsUtc(dateOffset(6)).from;
+    const toIso = dayBoundsUtc(todayStr()).to;
     try {
       const { data, error } = await sb.from("turnos")
         .select("entrada_at, horas_trab_secs")
         .is("deleted_at", null)
-        .gte("entrada_at", fromIso).lte("entrada_at", toIso);
+        .gte("entrada_at", fromIso).lt("entrada_at", toIso);
       if (error) throw error;
       const byDay = {};
       for (let i = 6; i >= 0; i--) byDay[dateOffset(i)] = 0;
@@ -300,8 +328,8 @@
   async function loadPeriod() {
     showOverlay("Cargando período...");
     try {
-      const fromIso = cache.periodFrom + "T00:00:00";
-      const toIso = cache.periodTo + "T23:59:59";
+      const fromIso = dayBoundsUtc(cache.periodFrom).from;
+      const toIso = dayBoundsUtc(cache.periodTo).to;
       const [turnos, assignments, corrections] = await Promise.all([
         fetchAllTurnos(fromIso, toIso),
         fetchAllAssignments(cache.periodFrom, cache.periodTo),
@@ -326,7 +354,7 @@
         .select("*")
         .is("deleted_at", null)
         .gte("entrada_at", fromIso)
-        .lte("entrada_at", toIso)
+        .lt("entrada_at", toIso)
         .order("entrada_at", { ascending: false })
         .range(from, from + pageSize - 1);
       if (error) throw error;

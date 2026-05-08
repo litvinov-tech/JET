@@ -21,6 +21,34 @@
   function startOfMonth(d) { const dd = new Date(d); dd.setDate(1); dd.setHours(0,0,0,0); return dd; }
   function dStr(d) { return d.toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE }); }
   function addDays(d, n) { const dd = new Date(d); dd.setDate(dd.getDate() + n); return dd; }
+  function addDateStr(dateStr, days) {
+    const d = new Date(dateStr + "T12:00:00Z");
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+  function tzOffsetMs(date) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: CFG.TIMEZONE, hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).formatToParts(date).reduce((a, p) => { a[p.type] = p.value; return a; }, {});
+    const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+    return asUtc - date.getTime();
+  }
+  function zonedTimeToUtcIso(dateStr, timeStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const [hh, mm, ss = 0] = timeStr.split(":").map(Number);
+    const wallAsUtc = Date.UTC(y, m - 1, d, hh, mm, ss);
+    let utc = new Date(wallAsUtc - tzOffsetMs(new Date(wallAsUtc)));
+    utc = new Date(wallAsUtc - tzOffsetMs(utc));
+    return utc.toISOString();
+  }
+  function dayBoundsUtc(dateStr) {
+    return {
+      from: zonedTimeToUtcIso(dateStr, "00:00:00"),
+      to: zonedTimeToUtcIso(addDateStr(dateStr, 1), "00:00:00"),
+    };
+  }
   function daysInRange() {
     if (mode === "week") return 7;
     const next = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1);
@@ -51,6 +79,10 @@
   async function load() {
     const start = new Date(anchor);
     const end = addDays(start, daysInRange() - 1);
+    const startDay = dStr(start);
+    const endDay = dStr(end);
+    const fromIso = dayBoundsUtc(startDay).from;
+    const toIso = dayBoundsUtc(endDay).to;
 
     // 1. Empleados activos (con puesto)
     const { data: empData } = await sb.from("empleados")
@@ -60,8 +92,8 @@
     // 2. Assignments en el rango
     const { data: asgn } = await sb.from("shift_assignments")
       .select("*")
-      .gte("fecha", dStr(start))
-      .lte("fecha", dStr(end));
+      .gte("fecha", startDay)
+      .lte("fecha", endDay);
     assignments = {};
     (asgn || []).forEach(a => assignments[`${a.empleado_id}|${a.fecha}`] = a);
 
@@ -69,8 +101,8 @@
     const { data: turnos } = await sb.from("turnos")
       .select("empleado_id, entrada_at, salida_at, horas_trab_secs")
       .is("deleted_at", null)
-      .gte("entrada_at", dStr(start) + "T00:00:00")
-      .lte("entrada_at", dStr(end) + "T23:59:59");
+      .gte("entrada_at", fromIso)
+      .lt("entrada_at", toIso);
     workedSet = {};
     (turnos || []).forEach(t => {
       const d = new Date(t.entrada_at).toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
