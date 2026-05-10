@@ -845,16 +845,18 @@
       ["Alertas", "Что проверить: открытая смена/перерыв, нет фото/GPS, аномальная jornada."],
     ];
     return `
-      <div class="work-manual">
-        <div class="work-manual-head">
+      <details class="work-manual">
+        <summary>
           <strong>${es ? "Manual de lectura" : "Инструкция к отчету"}</strong>
           <span>
-            <button class="${es ? "active" : ""}" onclick="window.JETAdmin.setWorkManualLang('es')">ES</button>
-            <button class="${!es ? "active" : ""}" onclick="window.JETAdmin.setWorkManualLang('ru')">RU</button>
+            <button class="${es ? "active" : ""}" onclick="window.JETAdmin.setWorkManualLang('es'); event.preventDefault();">ES</button>
+            <button class="${!es ? "active" : ""}" onclick="window.JETAdmin.setWorkManualLang('ru'); event.preventDefault();">RU</button>
           </span>
+        </summary>
+        <div class="work-manual-body">
+          ${items.map(([k, v]) => `<div><b>${escapeHtml(k)}</b><span>${escapeHtml(v)}</span></div>`).join("")}
         </div>
-        ${items.map(([k, v]) => `<div><b>${escapeHtml(k)}</b><span>${escapeHtml(v)}</span></div>`).join("")}
-      </div>`;
+      </details>`;
   }
 
   function setWorkManualLang(lang) {

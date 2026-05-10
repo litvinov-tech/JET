@@ -1140,6 +1140,17 @@ h2 {
   margin: 12px 0;
   padding: 10px 12px;
 }
+.work-manual summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.work-manual summary::-webkit-details-marker {
+  display: none;
+}
 .work-manual-head {
   display: flex;
   align-items: center;
@@ -1162,7 +1173,25 @@ h2 {
   border-color: var(--jet-blue);
   color: white;
 }
-.work-manual div:not(.work-manual-head) {
+.work-manual summary button {
+  border: 1px solid #d8e1f0;
+  background: white;
+  border-radius: 6px;
+  color: var(--jet-gray);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+.work-manual summary button.active {
+  background: var(--jet-blue);
+  border-color: var(--jet-blue);
+  color: white;
+}
+.work-manual-body {
+  margin-top: 8px;
+}
+.work-manual-body > div {
   display: grid;
   grid-template-columns: 92px 1fr;
   gap: 8px;
