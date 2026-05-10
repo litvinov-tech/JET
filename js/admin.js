@@ -3,6 +3,9 @@
 
 (function () {
   const { sb, $, $$, CFG, getSignedUrl } = window.JET;
+  const SHIFT_GUARD = CFG.SHIFT_GUARD || {};
+  const MAX_OPEN_SHIFT_SECS = Math.max(1, Number(SHIFT_GUARD.maxOpenHours || 12)) * 3600;
+  const AUTO_CLOSE_SOURCE = SHIFT_GUARD.autoCloseSource || "auto_closed_12h";
 
   // ── Date helpers ─────────────────────────────────────────────────────────
   function todayStr() { return new Date().toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE }); }
@@ -93,6 +96,65 @@
     }
     return Math.max(0, workSecs);
   }
+  function isAutoClosedTurno(r) {
+    return r?.source === AUTO_CLOSE_SOURCE;
+  }
+  function getAutoCloseInfo(r, nowMs = Date.now()) {
+    if (!r?.entrada_at || r.salida_at) return null;
+    const start = new Date(r.entrada_at).getTime();
+    if (!Number.isFinite(start)) return null;
+    const cutoffMs = start + MAX_OPEN_SHIFT_SECS * 1000;
+    if (nowMs < cutoffMs) return null;
+    return { cutoffMs, cutoffIso: new Date(cutoffMs).toISOString(), overdueSecs: Math.floor((nowMs - cutoffMs) / 1000) };
+  }
+  function lunchSecsForRow(r) {
+    if (!r?.ini_descanso_at || !r?.fin_descanso_at) return 0;
+    const start = new Date(r.ini_descanso_at).getTime();
+    const end = new Date(r.fin_descanso_at).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
+    return Math.max(0, Math.round((end - start) / 1000));
+  }
+  function buildAutoClosePatch(r) {
+    const info = getAutoCloseInfo(r);
+    if (!info) return null;
+    const patch = {
+      salida_at: info.cutoffIso,
+      source: AUTO_CLOSE_SOURCE,
+    };
+    const lunchStart = r.ini_descanso_at ? new Date(r.ini_descanso_at).getTime() : null;
+    if (r.ini_descanso_at && !r.fin_descanso_at && Number.isFinite(lunchStart) && lunchStart <= info.cutoffMs) {
+      patch.fin_descanso_at = info.cutoffIso;
+    }
+    const computedRow = { ...r, ...patch };
+    patch.horas_comida_secs = lunchSecsForRow(computedRow);
+    patch.horas_trab_secs = computeWorkSecs(computedRow) ?? MAX_OPEN_SHIFT_SECS;
+    return { patch, row: computedRow };
+  }
+  function mergeRowsById(rows) {
+    const map = new Map();
+    (rows || []).forEach(r => { if (r?.id != null) map.set(String(r.id), r); });
+    return Array.from(map.values());
+  }
+  async function autoCloseStaleTurnos(openRows) {
+    const candidates = (openRows || []).map(r => ({ original: r, built: buildAutoClosePatch(r) })).filter(x => x.built);
+    if (!candidates.length) return [];
+    const closed = [];
+    for (const item of candidates) {
+      const { original, built } = item;
+      const { data, error } = await sb.from("turnos")
+        .update(built.patch)
+        .eq("id", original.id)
+        .is("salida_at", null)
+        .select("*")
+        .maybeSingle();
+      if (error) {
+        console.warn("[JET] autoCloseStaleTurnos failed", original.id, error);
+        continue;
+      }
+      closed.push(data || built.row);
+    }
+    return closed;
+  }
   function shouldRepairTurno(r) {
     const computed = computeWorkSecs(r);
     const stored = Number(r?.horas_trab_secs);
@@ -146,6 +208,7 @@
     empleados: [], pending: [], turnosToday: [], openTurnos: [],
     periodTurnos: [], periodAssignments: [], periodCorrections: [], periodFrom: null, periodTo: null,
     correctionsPending: [],
+    autoClosedTurnos: [],
     admins: [],
   };
   let empMap = {}; // empleado_id -> nombre
@@ -182,21 +245,35 @@
     try {
       const today = todayStr();
       const todayBounds = dayBoundsUtc(today);
+      const recentAutoFrom = dayBoundsUtc(dateOffset(14)).from;
       myEmail = (await sb.auth.getUser()).data.user?.email || null;
-      const [pendingRes, activeRes, todayRes, openRes, corrRes, adminsRes] = await Promise.all([
+      const [pendingRes, activeRes, todayRes, openRes, corrRes, adminsRes, autoClosedRes] = await Promise.all([
         sb.from("empleados").select("id, nombre, email, telefono, created_at").eq("activo", false).order("created_at", { ascending: false }),
         sb.from("empleados").select("id, nombre, email, telefono, puesto").eq("activo", true).order("nombre"),
         sb.from("turnos").select("*").is("deleted_at", null).gte("entrada_at", todayBounds.from).lt("entrada_at", todayBounds.to).order("entrada_at", { ascending: true }),
         sb.from("turnos").select("*").is("deleted_at", null).is("salida_at", null).order("entrada_at", { ascending: true }),
         sb.from("correction_requests").select("*").eq("status", "pending").order("created_at", { ascending: true }),
         sb.from("admins").select("email, super, created_at").order("created_at", { ascending: true }),
+        sb.from("turnos").select("*").is("deleted_at", null).eq("source", AUTO_CLOSE_SOURCE).gte("entrada_at", recentAutoFrom).order("entrada_at", { ascending: false }).limit(50),
       ]);
+
+      let todayRows = todayRes.data || [];
+      let openRows = openRes.data || [];
+      const newlyAutoClosed = await autoCloseStaleTurnos(openRows);
+      if (newlyAutoClosed.length) {
+        const closedIds = new Set(newlyAutoClosed.map(r => String(r.id)));
+        openRows = openRows.filter(r => !closedIds.has(String(r.id)));
+        const closedToday = newlyAutoClosed.filter(r => r.entrada_at >= todayBounds.from && r.entrada_at < todayBounds.to);
+        todayRows = mergeRowsById([...todayRows, ...closedToday])
+          .sort((a, b) => String(a.entrada_at || "").localeCompare(String(b.entrada_at || "")));
+      }
 
       cache.pending = pendingRes.data || [];
       cache.empleados = activeRes.data || [];
-      cache.turnosToday = todayRes.data || [];
-      cache.openTurnos = openRes.data || [];
+      cache.turnosToday = todayRows;
+      cache.openTurnos = openRows;
       cache.correctionsPending = corrRes.data || [];
+      cache.autoClosedTurnos = mergeRowsById([...(newlyAutoClosed || []), ...((autoClosedRes && autoClosedRes.data) || [])]);
       cache.admins = adminsRes.data || [];
 
       empMap = {};
@@ -207,6 +284,7 @@
       renderKPIs();
       renderPending();
       renderCorrections();
+      renderAutoClosedAlerts();
       renderToday();
       renderActive();
       renderAdmins();
@@ -483,7 +561,7 @@
     $("#kpi-today-working").textContent = working;
     $("#kpi-today-hours").textContent = fmtH(totalSec);
     $("#kpi-active").textContent = cache.empleados.length;
-    $("#kpi-pending").textContent = cache.pending.length + cache.correctionsPending.length;
+    $("#kpi-pending").textContent = cache.pending.length + cache.correctionsPending.length + cache.autoClosedTurnos.length;
   }
 
   // ── Render: Pending registrations ────────────────────────────────────────
@@ -550,6 +628,44 @@
     list.querySelectorAll(".reject-btn").forEach(b => b.addEventListener("click", () => rejectCorrection(b.dataset.id)));
   }
 
+  function renderAutoClosedAlerts() {
+    const card = $("#admin-issues-card");
+    const list = $("#admin-issues-list");
+    const count = $("#admin-issues-count");
+    if (!card || !list || !count) return;
+    const rows = cache.autoClosedTurnos || [];
+    count.textContent = rows.length;
+    if (!rows.length) { card.style.display = "none"; return; }
+    card.style.display = "block";
+    list.innerHTML = "";
+    rows.slice(0, 30).forEach(r => {
+      const empName = empMap[r.empleado_id] || `(emp #${r.empleado_id})`;
+      const div = document.createElement("div");
+      div.className = "correction-item auto-close-alert";
+      div.innerHTML = `
+        <div class="correction-head">
+          <strong>${escapeHtml(empName)}</strong>
+          <span class="corr-type">Auto 12h</span>
+        </div>
+        <div class="correction-meta">${fmtDateLocal(r.entrada_at)} · ${fmtTimeShort(r.entrada_at)} - ${fmtTimeShort(r.salida_at)}</div>
+        <div class="correction-motivo">Turno cerrado automaticamente al limite de ${MAX_OPEN_SHIFT_SECS / 3600}h. Revisar salida real y ajustar si corresponde.</div>`;
+      list.appendChild(div);
+    });
+    if (rows.length > 30) {
+      const div = document.createElement("div");
+      div.className = "empty";
+      div.textContent = `${rows.length - 30} turnos mas en historial reciente`;
+      list.appendChild(div);
+    }
+  }
+
+  function renderTurnoStatusPills(r) {
+    const pills = [];
+    if (!r.salida_at) pills.push("<span class='live-pill'>en vivo</span>");
+    if (isAutoClosedTurno(r)) pills.push("<span class='source-pill source-pill-warn'>revisar salida</span>");
+    return pills.length ? " " + pills.join(" ") : "";
+  }
+
   // ── Render: Today details ────────────────────────────────────────────────
   function renderToday() {
     $("#admin-today-date").textContent = todayStr();
@@ -567,8 +683,9 @@
       const empName = empMap[r.empleado_id] || `(#${r.empleado_id})`;
       const photosHtml = renderTurnoPhotoLinks(r, empName);
       const tr = document.createElement("tr");
+      if (isAutoClosedTurno(r)) tr.className = "row-needs-review";
       const delBtn = `<button class="btn-mini btn-mini-delete" data-action="del-turno" data-id="${r.id}" data-name="${escapeHtml(empName)}" data-time="${fmtTimeShort(r.entrada_at)}-${fmtTimeShort(r.salida_at) || "abierto"}" title="Eliminar turno">🗑</button>`;
-      tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${fmtH(getTurnoLiveSecs(r))}${r.salida_at ? "" : " <span class='live-pill'>en vivo</span>"}</td><td>${photosHtml}</td><td>${delBtn}</td>`;
+      tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${fmtH(getTurnoLiveSecs(r))}${renderTurnoStatusPills(r)}</td><td>${photosHtml}</td><td>${delBtn}</td>`;
       tb.appendChild(tr);
     });
     tbl.appendChild(tb);
@@ -697,7 +814,8 @@
       if (t.salida_at && !t.gps_salida) missingGps.push("GPS salida");
       if (!t.salida_at) anomalies.push({ empId: t.empleado_id, text: `${d}: turno abierto desde ${fmtTimeShort(t.entrada_at)}` });
       if (t.ini_descanso_at && !t.fin_descanso_at) anomalies.push({ empId: t.empleado_id, text: `${d}: descanso abierto` });
-      if (secs > 12 * 3600) anomalies.push({ empId: t.empleado_id, text: `${d}: jornada mayor a 12h (${fmtH(secs)})` });
+      if (isAutoClosedTurno(t)) anomalies.push({ empId: t.empleado_id, text: `${d}: auto-cerrado a ${MAX_OPEN_SHIFT_SECS / 3600}h; revisar salida real` });
+      else if (secs > MAX_OPEN_SHIFT_SECS) anomalies.push({ empId: t.empleado_id, text: `${d}: jornada mayor a ${MAX_OPEN_SHIFT_SECS / 3600}h (${fmtH(secs)})` });
       if (secs < 0) anomalies.push({ empId: t.empleado_id, text: `${d}: horas negativas (${fmtH(secs)})` });
       if (missingPhotos.length || missingGps.length) {
         anomalies.push({ empId: t.empleado_id, text: `${d}: faltan ${[...missingPhotos, ...missingGps].join(", ")}` });
@@ -982,6 +1100,7 @@
       const empName = empMap[r.empleado_id] || `(#${r.empleado_id})`;
       const lunch = `${fmtTimeShort(r.ini_descanso_at)} - ${fmtTimeShort(r.fin_descanso_at)}`;
       const tr = document.createElement("tr");
+      if (isAutoClosedTurno(r)) tr.className = "row-needs-review";
       tr.innerHTML = `
         <td>${fmtDateLocal(r.entrada_at)}</td>
         <td><strong>${escapeHtml(empName)}</strong></td>
@@ -989,7 +1108,7 @@
         <td>${fmtTimeShort(r.entrada_at)}</td>
         <td>${lunch}</td>
         <td>${fmtTimeShort(r.salida_at)}</td>
-        <td>${fmtH(getTurnoLiveSecs(r))}${r.salida_at ? "" : " <span class='live-pill'>en vivo</span>"}</td>
+        <td>${fmtH(getTurnoLiveSecs(r))}${renderTurnoStatusPills(r)}</td>
         <td>${renderTurnoPhotoLinks(r, empName)}</td>`;
       tb.appendChild(tr);
     });

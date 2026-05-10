@@ -42,6 +42,11 @@ window.JET_CONFIG = {
     nightEnd: "06:00",
   },
 
+  SHIFT_GUARD: {
+    maxOpenHours: 12,
+    autoCloseSource: "auto_closed_12h",
+  },
+
   // Tiers — para agrupar empleados en cards separadas
   TIERS: {
     linea:   { label: "Línea",            icon: "👷" },

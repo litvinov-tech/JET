@@ -4,14 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
   <title>JET - Registro de Asistencia</title>
-  <meta name="theme-color" content="#005bff">
+  <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="JET">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="css/styles.css?v=24">
+  <link rel="stylesheet" href="css/styles.css?v=26">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -283,6 +283,11 @@
             <div id="admin-corrections-list"></div>
           </div>
 
+          <div class="card admin-card" id="admin-issues-card" style="display:none;">
+            <h3 class="card-title">Turnos para revisar <span class="badge badge-pending" id="admin-issues-count">0</span></h3>
+            <div id="admin-issues-list"></div>
+          </div>
+
           <!-- Empleados activos — agrupados por tier -->
           <div class="card admin-card">
             <h3 class="card-title">👷 Línea <span class="badge" id="admin-tier-linea-count">0</span></h3>
@@ -371,10 +376,10 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/config.js?v=24"></script>
-  <script src="js/app.js?v=24"></script>
-  <script src="js/admin.js?v=24"></script>
-  <script src="js/horarios.js?v=24"></script>
+  <script src="js/config.js?v=26"></script>
+  <script src="js/app.js?v=26"></script>
+  <script src="js/admin.js?v=26"></script>
+  <script src="js/horarios.js?v=26"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

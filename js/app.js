@@ -6,6 +6,9 @@ const sb = window.supabase.createClient(
   window.JET_CONFIG.SUPABASE_KEY
 );
 const CFG = window.JET_CONFIG;
+const SHIFT_GUARD = CFG.SHIFT_GUARD || {};
+const MAX_OPEN_SHIFT_SECS = Math.max(1, Number(SHIFT_GUARD.maxOpenHours || 12)) * 3600;
+const AUTO_CLOSE_SOURCE = SHIFT_GUARD.autoCloseSource || "auto_closed_12h";
 
 const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
@@ -59,6 +62,11 @@ function fmtDateLocal(isoStr) {
   if (!isoStr) return "";
   return new Date(isoStr).toLocaleDateString("en-CA", { timeZone: CFG.TIMEZONE });
 }
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, m => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[m]));
+}
 function dateOffset(days) {
   const d = new Date();
   d.setDate(d.getDate() - days);
@@ -101,6 +109,15 @@ function getTurnoWorkSecs(r) {
   if (stored > 16 * 3600) return computed;
   if (Math.abs(stored - computed) > 5 * 60) return computed;
   return stored;
+}
+function isAutoClosedTurno(r) {
+  return r?.source === AUTO_CLOSE_SOURCE;
+}
+function getOpenShiftSecs(r) {
+  if (!r?.entrada_at) return 0;
+  const start = new Date(r.entrada_at).getTime();
+  if (!Number.isFinite(start)) return 0;
+  return Math.max(0, Math.floor((Date.now() - start) / 1000));
 }
 function fmtDuration(secs) {
   if (secs == null) return "—";
@@ -294,6 +311,7 @@ async function enterMain() {
   initMap();
   startGPSWatch();
   await refreshActiveTurno();
+  refreshCorrectionReminder(); // async, no bloquear
   loadEmpleadoSchedule(); // async, no bloquear
 }
 
@@ -312,6 +330,60 @@ async function loadEmpleadoSchedule() {
     renderTodaySchedule(data || []);
     renderWeekStrip(data || []);
   } catch (e) { /* silencio: schedule es opcional */ }
+}
+
+async function refreshCorrectionReminder() {
+  if (!me || !me.empleadoId) return;
+  try {
+    const sinceIso = dateOffset(14) + "T00:00:00";
+    const [corrRes, autoRes] = await Promise.all([
+      sb.from("correction_requests")
+        .select("id, fecha, tipo, motivo, created_at")
+        .eq("empleado_id", me.empleadoId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(5),
+      sb.from("turnos")
+        .select("id, entrada_at, salida_at, source")
+        .eq("empleado_id", me.empleadoId)
+        .eq("source", AUTO_CLOSE_SOURCE)
+        .gte("entrada_at", sinceIso)
+        .order("entrada_at", { ascending: false })
+        .limit(5),
+    ]);
+    renderCorrectionReminder(corrRes.data || [], autoRes.data || []);
+  } catch (e) {
+    console.warn("[JET] correction reminder failed", e);
+  }
+}
+
+function renderCorrectionReminder(corrections, autoClosed) {
+  let el = $("#correction-reminder");
+  const anchor = $("#today-schedule") || $(".hero");
+  if (!anchor || !anchor.parentNode) return;
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "correction-reminder";
+    anchor.parentNode.insertBefore(el, anchor);
+  }
+  const total = (corrections || []).length + (autoClosed || []).length;
+  if (!total) {
+    el.style.display = "none";
+    el.innerHTML = "";
+    return;
+  }
+  el.style.display = "block";
+  const autoTxt = autoClosed.length ? `${autoClosed.length} turno(s) cerrado(s) automaticamente a ${MAX_OPEN_SHIFT_SECS / 3600}h` : "";
+  const corrTxt = corrections.length ? `${corrections.length} solicitud(es) pendiente(s)` : "";
+  el.className = "correction-reminder";
+  el.innerHTML = `
+    <div>
+      <strong>Revision pendiente</strong>
+      <span>${escapeHtml([autoTxt, corrTxt].filter(Boolean).join(" · "))}</span>
+    </div>
+    <button class="btn btn-link" type="button" id="btn-open-reminder-hours">Ver mis horas</button>`;
+  const btn = $("#btn-open-reminder-hours");
+  if (btn) btn.onclick = loadMisHoras;
 }
 
 function renderTodaySchedule(rows) {
@@ -511,6 +583,7 @@ function renderShift() {
   }
 
   const onBreak = activeTurno.ini_descanso_at && !activeTurno.fin_descanso_at;
+  const overLimit = getOpenShiftSecs(activeTurno) >= MAX_OPEN_SHIFT_SECS;
   if (onBreak) {
     heroLabel.textContent = "EN DESCANSO";
     heroLabel.className = "hero-label hero-label-break";
@@ -523,9 +596,11 @@ function renderShift() {
     clockBtn.onclick = () => triggerAction("end_lunch");
     if (dot) dot.className = "emp-status-dot dot-break";
   } else {
-    heroLabel.textContent = "TRABAJANDO";
-    heroLabel.className = "hero-label hero-label-active";
-    heroSub.textContent = activeTurno.punto || "";
+    heroLabel.textContent = overLimit ? "REQUIERE REVISION" : "TRABAJANDO";
+    heroLabel.className = "hero-label " + (overLimit ? "hero-label-break" : "hero-label-active");
+    heroSub.textContent = overLimit
+      ? `Esta jornada supero ${MAX_OPEN_SHIFT_SECS / 3600}h. Cierra turno y avisa al admin si la hora real es distinta.`
+      : (activeTurno.punto || "");
     timerEl.classList.add("active");
     timerEl.classList.remove("on-break");
     clockBtn.className = "btn-clock btn-clock-stop";
@@ -800,6 +875,10 @@ function renderMisHoras(turnos, corrections, shifts) {
         if (r.source === "manual_correction") {
           statusPill = ` <span class="status-pill" style="background:var(--jet-warn);color:#5a3e00;">EDITADO</span>`;
         }
+        if (isAutoClosedTurno(r)) {
+          statusPill += ` <span class="status-pill" style="background:#fff7ed;color:#9a3412;">REVISAR SALIDA</span>`;
+          cls += " needs-review";
+        }
       } else if (s) {
         // No hubo turno, pero hay registro de schedule
         const st = CFG.SHIFT_STATUS[s.status];
@@ -916,6 +995,7 @@ async function submitCorrection() {
     });
     if (error) throw new Error(error.message);
     toast("Solicitud enviada al admin", "success");
+    refreshCorrectionReminder();
     switchTab("empleado");
   } catch (e) {
     toast(e.message, "error");
