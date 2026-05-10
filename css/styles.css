@@ -1534,3 +1534,158 @@ h2 {
   margin-left: 6px;
   letter-spacing: 0.4px;
 }
+
+/* Admin v22: calmer operations dashboard */
+body:has(#view-admin.active) {
+  background: #f4f7fb;
+}
+body:has(#view-admin.active) .container {
+  max-width: 1280px;
+}
+body:has(#view-admin.active) .brand {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 8px 4px 14px;
+}
+body:has(#view-admin.active) .brand h1 {
+  font-size: 30px;
+  letter-spacing: 0;
+  line-height: 1;
+}
+body:has(#view-admin.active) .tagline {
+  margin: 0;
+  font-size: 12px;
+}
+body:has(#view-admin.active) .tabs {
+  max-width: none;
+  margin-bottom: 22px;
+  border: 1px solid #dfe6f2;
+  box-shadow: none;
+}
+body:has(#view-admin.active) .tab,
+body:has(#view-admin.active) .tab-logout {
+  min-height: 36px;
+}
+body:has(#view-admin.active) .admin-header {
+  align-items: center;
+  padding: 0 2px 14px;
+}
+body:has(#view-admin.active) .admin-title {
+  font-size: 22px;
+  letter-spacing: 0;
+}
+body:has(#view-admin.active) .admin-card,
+body:has(#view-admin.active) .kpi,
+body:has(#view-admin.active) .live-card,
+body:has(#view-admin.active) .work-manual,
+body:has(#view-admin.active) .work-alerts {
+  border-radius: 8px;
+  box-shadow: none;
+}
+body:has(#view-admin.active) .admin-card,
+body:has(#view-admin.active) .kpi {
+  border: 1px solid #dfe6f2;
+}
+body:has(#view-admin.active) .kpi-grid-pro {
+  gap: 10px;
+}
+body:has(#view-admin.active) .kpi-grid-pro .kpi {
+  padding: 14px;
+}
+body:has(#view-admin.active) .kpi-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 18px;
+  background: #f1f4f9;
+}
+body:has(#view-admin.active) .kpi-grid-pro .kpi-value {
+  font-size: 24px;
+}
+body:has(#view-admin.active) .admin-grid {
+  grid-template-columns: minmax(360px, 0.9fr) minmax(560px, 1.1fr);
+  align-items: start;
+}
+body:has(#view-admin.active) .card-title {
+  margin-bottom: 12px;
+  letter-spacing: 0;
+}
+body:has(#view-admin.active) .hours-chart {
+  height: 160px;
+}
+body:has(#view-admin.active) .chart-bar {
+  min-height: 6px;
+}
+body:has(#view-admin.active) .period-summary {
+  background: #f7faff;
+  border: 1px solid #e2e9f5;
+  border-radius: 8px;
+}
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #e5f8ed;
+  color: #087a3b;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.emp-admin-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+.emp-admin-main {
+  min-width: 0;
+}
+.emp-admin-name {
+  font-size: 14px;
+  font-weight: 750;
+  color: var(--jet-dark);
+  line-height: 1.35;
+}
+.emp-admin-meta {
+  color: #697386;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.emp-admin-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.role-select {
+  max-width: 170px;
+}
+body:has(#view-admin.active) .btn-mini {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 7px;
+}
+@media (max-width: 899px) {
+  body:has(#view-admin.active) .admin-grid {
+    grid-template-columns: 1fr;
+  }
+  .emp-admin-row {
+    grid-template-columns: 1fr;
+  }
+  .emp-admin-controls {
+    justify-content: space-between;
+  }
+  .role-select {
+    max-width: none;
+    flex: 1;
+  }
+}

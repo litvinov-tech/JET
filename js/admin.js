@@ -77,6 +77,22 @@
     if (Math.abs(stored - computed) > 5 * 60) return computed;
     return stored;
   }
+  function getTurnoLiveSecs(r) {
+    if (!r?.entrada_at) return 0;
+    if (r.salida_at) return getTurnoWorkSecs(r);
+    const start = new Date(r.entrada_at).getTime();
+    const end = Date.now();
+    if (!Number.isFinite(start) || end < start) return 0;
+    let workSecs = Math.round((end - start) / 1000);
+    if (r.ini_descanso_at) {
+      const lunchStart = new Date(r.ini_descanso_at).getTime();
+      const lunchEnd = r.fin_descanso_at ? new Date(r.fin_descanso_at).getTime() : end;
+      if (Number.isFinite(lunchStart) && Number.isFinite(lunchEnd) && lunchEnd >= lunchStart) {
+        workSecs -= Math.round((lunchEnd - lunchStart) / 1000);
+      }
+    }
+    return Math.max(0, workSecs);
+  }
   function shouldRepairTurno(r) {
     const computed = computeWorkSecs(r);
     const stored = Number(r?.horas_trab_secs);
@@ -272,6 +288,8 @@
         const s = Math.floor(workSecs % 60);
         el.textContent = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
       });
+      const kpiHours = $("#kpi-today-hours");
+      if (kpiHours) kpiHours.textContent = fmtH(cache.turnosToday.reduce((s, t) => s + getTurnoLiveSecs(t), 0));
     };
     update();
     liveTimerHandle = setInterval(update, 1000);
@@ -291,7 +309,7 @@
       for (let i = 6; i >= 0; i--) byDay[dateOffset(i)] = 0;
       (data || []).forEach(r => {
         const d = fmtDateLocal(r.entrada_at);
-        if (d in byDay) byDay[d] += getTurnoWorkSecs(r);
+        if (d in byDay) byDay[d] += getTurnoLiveSecs(r);
       });
       renderHoursChart(byDay);
     } catch (e) {
@@ -457,7 +475,7 @@
   // ── Render: KPIs ─────────────────────────────────────────────────────────
   function renderKPIs() {
     const working = cache.turnosToday.filter(t => !t.salida_at).length;
-    const totalSec = cache.turnosToday.reduce((s, t) => s + getTurnoWorkSecs(t), 0);
+    const totalSec = cache.turnosToday.reduce((s, t) => s + getTurnoLiveSecs(t), 0);
     $("#kpi-today-working").textContent = working;
     $("#kpi-today-hours").textContent = fmtH(totalSec);
     $("#kpi-active").textContent = cache.empleados.length;
@@ -546,7 +564,7 @@
       const photosHtml = renderTurnoPhotoLinks(r, empName);
       const tr = document.createElement("tr");
       const delBtn = `<button class="btn-mini btn-mini-delete" data-action="del-turno" data-id="${r.id}" data-name="${escapeHtml(empName)}" data-time="${fmtTimeShort(r.entrada_at)}-${fmtTimeShort(r.salida_at) || "abierto"}" title="Eliminar turno">🗑</button>`;
-      tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${r.salida_at ? fmtH(getTurnoWorkSecs(r)) : "—"}</td><td>${photosHtml}</td><td>${delBtn}</td>`;
+      tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${fmtH(getTurnoLiveSecs(r))}${r.salida_at ? "" : " <span class='live-pill'>en vivo</span>"}</td><td>${photosHtml}</td><td>${delBtn}</td>`;
       tb.appendChild(tr);
     });
     tbl.appendChild(tb);
@@ -578,7 +596,7 @@
     const empAgg = {};
     const days = new Set();
     rows.forEach(r => {
-      const sec = getTurnoWorkSecs(r);
+      const sec = getTurnoLiveSecs(r);
       const lun = r.horas_comida_secs || 0;
       totalSec += sec;
       totalLunchSec += lun;
@@ -659,7 +677,7 @@
       const key = `${t.empleado_id}|${d}`;
       if (!actualByKey[key]) actualByKey[key] = { secs: 0, firstIn: null, lastOut: null, rows: [] };
       const rec = actualByKey[key];
-      const secs = getTurnoWorkSecs(t);
+      const secs = getTurnoLiveSecs(t);
       rec.secs += secs;
       rec.rows.push(t);
       if (!rec.firstIn || new Date(t.entrada_at) < new Date(rec.firstIn)) rec.firstIn = t.entrada_at;
@@ -668,7 +686,8 @@
       emp.actual += secs;
       emp.turnos += 1;
 
-      const missingPhotos = ["foto_entrada", "foto_salida"].filter(k => !t[k]);
+      const missingPhotos = ["foto_entrada"].filter(k => !t[k]);
+      if (t.salida_at && !t.foto_salida) missingPhotos.push("foto_salida");
       const missingGps = [];
       if (!t.gps_entrada) missingGps.push("GPS entrada");
       if (t.salida_at && !t.gps_salida) missingGps.push("GPS salida");
@@ -869,7 +888,7 @@
         .forEach(t => {
           const d = fmtDateLocal(t.entrada_at);
           if (!workedByDate[d]) workedByDate[d] = 0;
-          workedByDate[d] += getTurnoWorkSecs(t);
+          workedByDate[d] += getTurnoLiveSecs(t);
         });
 
       let dailyOvertimeSecs = 0;
@@ -905,7 +924,7 @@
       .filter(t => String(t.empleado_id) === String(empId))
       .reduce((s, t) => {
         const day = new Date(t.entrada_at).toLocaleDateString("en-US", { weekday: "short", timeZone: CFG.TIMEZONE });
-        return s + (day === "Sun" ? getTurnoWorkSecs(t) : 0);
+        return s + (day === "Sun" ? getTurnoLiveSecs(t) : 0);
       }, 0);
   }
 
@@ -915,7 +934,7 @@
     const end = rules.nightEnd || "06:00";
     return (cache.periodTurnos || [])
       .filter(t => String(t.empleado_id) === String(empId))
-      .reduce((s, t) => s + overlapWindowSecs(t.entrada_at, t.salida_at, start, end), 0);
+      .reduce((s, t) => s + overlapWindowSecs(t.entrada_at, t.salida_at || new Date().toISOString(), start, end), 0);
   }
 
   function overlapWindowSecs(startIso, endIso, winStart, winEnd) {
@@ -964,7 +983,7 @@
         <td>${fmtTimeShort(r.entrada_at)}</td>
         <td>${lunch}</td>
         <td>${fmtTimeShort(r.salida_at)}</td>
-        <td>${r.salida_at ? fmtH(getTurnoWorkSecs(r)) : "—"}</td>
+        <td>${fmtH(getTurnoLiveSecs(r))}${r.salida_at ? "" : " <span class='live-pill'>en vivo</span>"}</td>
         <td>${renderTurnoPhotoLinks(r, empName)}</td>`;
       tb.appendChild(tr);
     });
@@ -1000,7 +1019,7 @@
     cache.admins.forEach(a => adminMap[a.email] = a);
     empleados.forEach(e => {
       const div = document.createElement("div");
-      div.className = "week-row";
+      div.className = "week-row emp-admin-row";
       const adm = adminMap[e.email];
       const isAdmin = !!adm;
       const isSuper = adm && adm.super;
@@ -1017,14 +1036,16 @@
         return `<option value="${k}" ${e.puesto === k ? "selected" : ""}>${lbl}</option>`;
       }).join("");
       div.innerHTML = `
-        <span style="min-width:0;flex:1;">
-          <strong>${escapeHtml(e.nombre)}</strong>${adminBadge}${roleBadge}<br>
-          <small style="color:var(--jet-gray);font-size:11px;">${escapeHtml(e.email)}${e.telefono ? " · " + escapeHtml(e.telefono) : ""}</small>
-        </span>
-        <select class="role-select" data-action="set-role" data-id="${e.id}">${roleOptions}</select>
-        <div class="emp-actions">
-          ${promoteBtn}
-          ${deleteBtn}
+        <div class="emp-admin-main">
+          <div class="emp-admin-name">${escapeHtml(e.nombre)}${adminBadge}${roleBadge}</div>
+          <div class="emp-admin-meta">${escapeHtml(e.email)}${e.telefono ? " · " + escapeHtml(e.telefono) : ""}</div>
+        </div>
+        <div class="emp-admin-controls">
+          <select class="role-select" data-action="set-role" data-id="${e.id}">${roleOptions}</select>
+          <div class="emp-actions">
+            ${promoteBtn}
+            ${deleteBtn}
+          </div>
         </div>`;
       list.appendChild(div);
     });
@@ -1216,7 +1237,7 @@
       fmtTimeShort(r.entrada_at), fmtTimeShort(r.ini_descanso_at),
       fmtTimeShort(r.fin_descanso_at), fmtTimeShort(r.salida_at),
       r.horas_comida_secs ? fmtH(r.horas_comida_secs) : "",
-      r.salida_at ? fmtH(getTurnoWorkSecs(r)) : "",
+      r.salida_at ? fmtH(getTurnoWorkSecs(r)) : fmtH(getTurnoLiveSecs(r)),
       r.gps_entrada || "", r.gps_salida || "",
       r.source || "app",
     ]);
@@ -1226,11 +1247,11 @@
       const day = fmtDateLocal(r.entrada_at);
       if (!empSummary[empId]) empSummary[empId] = { name: empName, days: {}, shifts: 0, totalSecs: 0 };
       empSummary[empId].shifts += 1;
-      const secs = getTurnoWorkSecs(r);
+      const secs = getTurnoLiveSecs(r);
       empSummary[empId].totalSecs += secs;
       empSummary[empId].days[day] = (empSummary[empId].days[day] || 0) + secs;
     });
-    const totalSec = cache.periodTurnos.reduce((s, r) => s + getTurnoWorkSecs(r), 0);
+    const totalSec = cache.periodTurnos.reduce((s, r) => s + getTurnoLiveSecs(r), 0);
     rows.push([]);
     rows.push(["TOTAL", "", "", "", "", "", "", "", fmtH(totalSec), "", "", ""]);
     rows.push([]);
@@ -1282,12 +1303,12 @@
       const d = fmtDateLocal(t.entrada_at);
       const key = `${t.empleado_id}|${d}`;
       if (!actualByKey[key]) actualByKey[key] = { secs: 0, firstIn: null, lastOut: null, rows: [] };
-      actualByKey[key].secs += getTurnoWorkSecs(t);
+      actualByKey[key].secs += getTurnoLiveSecs(t);
       actualByKey[key].rows.push(t);
       if (!actualByKey[key].firstIn || new Date(t.entrada_at) < new Date(actualByKey[key].firstIn)) actualByKey[key].firstIn = t.entrada_at;
       if (t.salida_at && (!actualByKey[key].lastOut || new Date(t.salida_at) > new Date(actualByKey[key].lastOut))) actualByKey[key].lastOut = t.salida_at;
       const emp = ensure(t.empleado_id);
-      emp.actual += getTurnoWorkSecs(t);
+      emp.actual += getTurnoLiveSecs(t);
       emp.turnos += 1;
     });
     const scheduledKeys = new Set();
