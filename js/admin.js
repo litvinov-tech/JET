@@ -143,7 +143,7 @@
 
   // ── State ────────────────────────────────────────────────────────────────
   let cache = {
-    empleados: [], pending: [], turnosToday: [],
+    empleados: [], pending: [], turnosToday: [], openTurnos: [],
     periodTurnos: [], periodAssignments: [], periodCorrections: [], periodFrom: null, periodTo: null,
     correctionsPending: [],
     admins: [],
@@ -183,10 +183,11 @@
       const today = todayStr();
       const todayBounds = dayBoundsUtc(today);
       myEmail = (await sb.auth.getUser()).data.user?.email || null;
-      const [pendingRes, activeRes, todayRes, corrRes, adminsRes] = await Promise.all([
+      const [pendingRes, activeRes, todayRes, openRes, corrRes, adminsRes] = await Promise.all([
         sb.from("empleados").select("id, nombre, email, telefono, created_at").eq("activo", false).order("created_at", { ascending: false }),
         sb.from("empleados").select("id, nombre, email, telefono, puesto").eq("activo", true).order("nombre"),
         sb.from("turnos").select("*").is("deleted_at", null).gte("entrada_at", todayBounds.from).lt("entrada_at", todayBounds.to).order("entrada_at", { ascending: true }),
+        sb.from("turnos").select("*").is("deleted_at", null).is("salida_at", null).order("entrada_at", { ascending: true }),
         sb.from("correction_requests").select("*").eq("status", "pending").order("created_at", { ascending: true }),
         sb.from("admins").select("email, super, created_at").order("created_at", { ascending: true }),
       ]);
@@ -194,6 +195,7 @@
       cache.pending = pendingRes.data || [];
       cache.empleados = activeRes.data || [];
       cache.turnosToday = todayRes.data || [];
+      cache.openTurnos = openRes.data || [];
       cache.correctionsPending = corrRes.data || [];
       cache.admins = adminsRes.data || [];
 
@@ -224,7 +226,7 @@
   function renderLiveBoard() {
     const board = $("#live-board");
     if (!board) return;
-    const open = cache.turnosToday.filter(t => !t.salida_at);
+    const open = cache.openTurnos || [];
     $("#live-count").textContent = open.length;
     board.innerHTML = "";
     if (!open.length) {
@@ -240,14 +242,16 @@
       const initial = empName.trim().charAt(0).toUpperCase();
       const onBreak = t.ini_descanso_at && !t.fin_descanso_at;
       const startMs = new Date(t.entrada_at).getTime();
+      const startedDay = fmtDateLocal(t.entrada_at);
+      const staleOpen = startedDay !== todayStr();
       const photoPath = t.foto_entrada;
       const card = document.createElement("div");
-      card.className = "live-card" + (onBreak ? " on-break" : "");
+      card.className = "live-card" + (onBreak ? " on-break" : "") + (staleOpen ? " stale-open" : "");
       card.innerHTML = `
         <div class="live-card-photo" data-path="${escapeHtml(photoPath || "")}" data-caption="${escapeHtml(empName + " · entrada " + fmtTimeShort(t.entrada_at))}">${initial}</div>
         <div class="live-card-info">
           <div class="live-card-name">${escapeHtml(empName)}${roleBadge}</div>
-          <div class="live-card-park">${escapeHtml(t.punto || "—")} · entrada ${fmtTimeShort(t.entrada_at)}</div>
+          <div class="live-card-park">${escapeHtml(t.punto || "—")} · ${staleOpen ? startedDay + " " : ""}entrada ${fmtTimeShort(t.entrada_at)}</div>
           <div class="live-card-timer" data-start="${startMs}" data-break-start="${t.ini_descanso_at ? new Date(t.ini_descanso_at).getTime() : ""}" data-break-end="${t.fin_descanso_at ? new Date(t.fin_descanso_at).getTime() : ""}">—</div>
         </div>`;
       board.appendChild(card);
@@ -474,7 +478,7 @@
 
   // ── Render: KPIs ─────────────────────────────────────────────────────────
   function renderKPIs() {
-    const working = cache.turnosToday.filter(t => !t.salida_at).length;
+    const working = (cache.openTurnos || []).length;
     const totalSec = cache.turnosToday.reduce((s, t) => s + getTurnoLiveSecs(t), 0);
     $("#kpi-today-working").textContent = working;
     $("#kpi-today-hours").textContent = fmtH(totalSec);

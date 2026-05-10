@@ -875,6 +875,13 @@ h2 {
   position: relative;
 }
 .live-card.on-break { background: linear-gradient(135deg, #fff8e1, white); border-color: #ffe49a; }
+.live-card.stale-open {
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+.live-card.stale-open .live-card-timer {
+  color: #c2410c;
+}
 .live-card-photo {
   width: 56px; height: 56px;
   border-radius: 10px;
