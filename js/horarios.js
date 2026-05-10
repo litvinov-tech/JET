@@ -59,6 +59,37 @@
       "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
     }[m]));
   }
+  function fmtH(secs) {
+    secs = Math.max(0, Math.round(Number(secs) || 0));
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return `${h}h${String(m).padStart(2, "0")}`;
+  }
+  function computeWorkSecs(r) {
+    if (!r || !r.entrada_at || !r.salida_at) return null;
+    const start = new Date(r.entrada_at).getTime();
+    const end = new Date(r.salida_at).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+    let workSecs = Math.round((end - start) / 1000);
+    if (r.ini_descanso_at && r.fin_descanso_at) {
+      const lunchStart = new Date(r.ini_descanso_at).getTime();
+      const lunchEnd = new Date(r.fin_descanso_at).getTime();
+      if (Number.isFinite(lunchStart) && Number.isFinite(lunchEnd) && lunchEnd >= lunchStart) {
+        workSecs -= Math.round((lunchEnd - lunchStart) / 1000);
+      }
+    }
+    return Math.max(0, workSecs);
+  }
+  function getTurnoWorkSecs(r) {
+    if (!r?.salida_at) return 0;
+    const computed = computeWorkSecs(r);
+    const stored = Number(r?.horas_trab_secs);
+    if (!Number.isFinite(stored) || stored < 0) return computed || 0;
+    if (computed == null) return stored;
+    if (stored > 16 * 3600) return computed;
+    if (Math.abs(stored - computed) > 5 * 60) return computed;
+    return stored;
+  }
 
   async function open() {
     const isAdmin = window.JETAdmin && (await sb.from("admins").select("email").eq("email", window.JETAdmin.getMyEmail()).maybeSingle()).data;
@@ -99,7 +130,7 @@
 
     // 3. Turnos reales en el rango (para mostrar "trabajado")
     const { data: turnos } = await sb.from("turnos")
-      .select("empleado_id, entrada_at, salida_at, horas_trab_secs")
+      .select("empleado_id, entrada_at, ini_descanso_at, fin_descanso_at, salida_at, horas_trab_secs")
       .is("deleted_at", null)
       .gte("entrada_at", fromIso)
       .lt("entrada_at", toIso);
@@ -167,7 +198,7 @@
           }
         } else if (w) {
           cls += " is-worked";
-          const hours = w.horas_trab_secs ? `${Math.floor(w.horas_trab_secs/3600)}h${String(Math.floor((w.horas_trab_secs%3600)/60)).padStart(2,"0")}` : "•";
+          const hours = w.salida_at ? fmtH(getTurnoWorkSecs(w)) : "•";
           content = `<span class="hc-time">✓</span><span class="hc-status">${hours}</span>`;
         } else {
           cls += " empty";

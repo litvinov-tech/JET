@@ -52,6 +52,60 @@
     const m = Math.floor((secs % 3600) / 60);
     return h + "h " + (m < 10 ? "0" : "") + m + "m";
   }
+  function computeWorkSecs(r) {
+    if (!r || !r.entrada_at || !r.salida_at) return null;
+    const start = new Date(r.entrada_at).getTime();
+    const end = new Date(r.salida_at).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+    let workSecs = Math.round((end - start) / 1000);
+    if (r.ini_descanso_at && r.fin_descanso_at) {
+      const lunchStart = new Date(r.ini_descanso_at).getTime();
+      const lunchEnd = new Date(r.fin_descanso_at).getTime();
+      if (Number.isFinite(lunchStart) && Number.isFinite(lunchEnd) && lunchEnd >= lunchStart) {
+        workSecs -= Math.round((lunchEnd - lunchStart) / 1000);
+      }
+    }
+    return Math.max(0, workSecs);
+  }
+  function getTurnoWorkSecs(r) {
+    if (!r?.salida_at) return 0;
+    const computed = computeWorkSecs(r);
+    const stored = Number(r?.horas_trab_secs);
+    if (!Number.isFinite(stored) || stored < 0) return computed || 0;
+    if (computed == null) return stored;
+    if (stored > 16 * 3600) return computed;
+    if (Math.abs(stored - computed) > 5 * 60) return computed;
+    return stored;
+  }
+  function shouldRepairTurno(r) {
+    const computed = computeWorkSecs(r);
+    const stored = Number(r?.horas_trab_secs);
+    if (computed == null) return false;
+    if (!Number.isFinite(stored) || stored < 0) return true;
+    return stored > 16 * 3600 || Math.abs(stored - computed) > 5 * 60;
+  }
+  async function repairTurnoHours(rows) {
+    const candidates = (rows || []).filter(r => shouldRepairTurno(r));
+    if (!candidates.length) return 0;
+    let repaired = 0;
+    for (const r of candidates) {
+      const workSecs = computeWorkSecs(r);
+      if (workSecs == null) continue;
+      const lunchSecs = (r.ini_descanso_at && r.fin_descanso_at)
+        ? Math.max(0, Math.round((new Date(r.fin_descanso_at).getTime() - new Date(r.ini_descanso_at).getTime()) / 1000))
+        : 0;
+      const patch = { horas_trab_secs: workSecs, horas_comida_secs: lunchSecs };
+      const { error } = await sb.from("turnos").update(patch).eq("id", r.id);
+      if (error) {
+        console.warn("[JET] repairTurnoHours failed", r.id, error);
+        continue;
+      }
+      r.horas_trab_secs = workSecs;
+      r.horas_comida_secs = lunchSecs;
+      repaired += 1;
+    }
+    return repaired;
+  }
   function fmtTimeShort(isoStr) {
     if (!isoStr) return "—";
     return new Date(isoStr).toLocaleTimeString("en-GB", {
@@ -229,7 +283,7 @@
     const toIso = dayBoundsUtc(todayStr()).to;
     try {
       const { data, error } = await sb.from("turnos")
-        .select("entrada_at, horas_trab_secs")
+        .select("entrada_at, ini_descanso_at, fin_descanso_at, salida_at, horas_trab_secs")
         .is("deleted_at", null)
         .gte("entrada_at", fromIso).lt("entrada_at", toIso);
       if (error) throw error;
@@ -237,7 +291,7 @@
       for (let i = 6; i >= 0; i--) byDay[dateOffset(i)] = 0;
       (data || []).forEach(r => {
         const d = fmtDateLocal(r.entrada_at);
-        if (d in byDay) byDay[d] += r.horas_trab_secs || 0;
+        if (d in byDay) byDay[d] += getTurnoWorkSecs(r);
       });
       renderHoursChart(byDay);
     } catch (e) {
@@ -335,10 +389,12 @@
         fetchAllAssignments(cache.periodFrom, cache.periodTo),
         fetchAllCorrections(cache.periodFrom, cache.periodTo),
       ]);
+      const repaired = await repairTurnoHours(turnos);
       cache.periodTurnos = turnos;
       cache.periodAssignments = assignments;
       cache.periodCorrections = corrections;
       renderPeriod();
+      if (repaired) console.info(`[JET] repaired ${repaired} turno(s) in period ${cache.periodFrom} → ${cache.periodTo}`);
     } catch (e) {
       alert("Error: " + e.message);
     } finally {
@@ -401,7 +457,7 @@
   // ── Render: KPIs ─────────────────────────────────────────────────────────
   function renderKPIs() {
     const working = cache.turnosToday.filter(t => !t.salida_at).length;
-    const totalSec = cache.turnosToday.reduce((s, t) => s + (t.horas_trab_secs || 0), 0);
+    const totalSec = cache.turnosToday.reduce((s, t) => s + getTurnoWorkSecs(t), 0);
     $("#kpi-today-working").textContent = working;
     $("#kpi-today-hours").textContent = fmtH(totalSec);
     $("#kpi-active").textContent = cache.empleados.length;
@@ -490,7 +546,7 @@
       const photosHtml = renderTurnoPhotoLinks(r, empName);
       const tr = document.createElement("tr");
       const delBtn = `<button class="btn-mini btn-mini-delete" data-action="del-turno" data-id="${r.id}" data-name="${escapeHtml(empName)}" data-time="${fmtTimeShort(r.entrada_at)}-${fmtTimeShort(r.salida_at) || "abierto"}" title="Eliminar turno">🗑</button>`;
-      tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${r.horas_trab_secs ? fmtH(r.horas_trab_secs) : "—"}</td><td>${photosHtml}</td><td>${delBtn}</td>`;
+      tr.innerHTML = `<td>${escapeHtml(empName)}</td><td>${escapeHtml(r.punto || "")}</td><td>${fmtTimeShort(r.entrada_at)}</td><td>${fmtTimeShort(r.salida_at)}</td><td>${r.salida_at ? fmtH(getTurnoWorkSecs(r)) : "—"}</td><td>${photosHtml}</td><td>${delBtn}</td>`;
       tb.appendChild(tr);
     });
     tbl.appendChild(tb);
@@ -522,7 +578,7 @@
     const empAgg = {};
     const days = new Set();
     rows.forEach(r => {
-      const sec = r.horas_trab_secs || 0;
+      const sec = getTurnoWorkSecs(r);
       const lun = r.horas_comida_secs || 0;
       totalSec += sec;
       totalLunchSec += lun;
@@ -603,7 +659,7 @@
       const key = `${t.empleado_id}|${d}`;
       if (!actualByKey[key]) actualByKey[key] = { secs: 0, firstIn: null, lastOut: null, rows: [] };
       const rec = actualByKey[key];
-      const secs = t.horas_trab_secs || 0;
+      const secs = getTurnoWorkSecs(t);
       rec.secs += secs;
       rec.rows.push(t);
       if (!rec.firstIn || new Date(t.entrada_at) < new Date(rec.firstIn)) rec.firstIn = t.entrada_at;
@@ -813,7 +869,7 @@
         .forEach(t => {
           const d = fmtDateLocal(t.entrada_at);
           if (!workedByDate[d]) workedByDate[d] = 0;
-          workedByDate[d] += t.horas_trab_secs || 0;
+          workedByDate[d] += getTurnoWorkSecs(t);
         });
 
       let dailyOvertimeSecs = 0;
@@ -849,7 +905,7 @@
       .filter(t => String(t.empleado_id) === String(empId))
       .reduce((s, t) => {
         const day = new Date(t.entrada_at).toLocaleDateString("en-US", { weekday: "short", timeZone: CFG.TIMEZONE });
-        return s + (day === "Sun" ? (t.horas_trab_secs || 0) : 0);
+        return s + (day === "Sun" ? getTurnoWorkSecs(t) : 0);
       }, 0);
   }
 
@@ -908,7 +964,7 @@
         <td>${fmtTimeShort(r.entrada_at)}</td>
         <td>${lunch}</td>
         <td>${fmtTimeShort(r.salida_at)}</td>
-        <td>${r.horas_trab_secs ? fmtH(r.horas_trab_secs) : "—"}</td>
+        <td>${r.salida_at ? fmtH(getTurnoWorkSecs(r)) : "—"}</td>
         <td>${renderTurnoPhotoLinks(r, empName)}</td>`;
       tb.appendChild(tr);
     });
@@ -1160,7 +1216,7 @@
       fmtTimeShort(r.entrada_at), fmtTimeShort(r.ini_descanso_at),
       fmtTimeShort(r.fin_descanso_at), fmtTimeShort(r.salida_at),
       r.horas_comida_secs ? fmtH(r.horas_comida_secs) : "",
-      r.horas_trab_secs ? fmtH(r.horas_trab_secs) : "",
+      r.salida_at ? fmtH(getTurnoWorkSecs(r)) : "",
       r.gps_entrada || "", r.gps_salida || "",
       r.source || "app",
     ]);
@@ -1170,10 +1226,11 @@
       const day = fmtDateLocal(r.entrada_at);
       if (!empSummary[empId]) empSummary[empId] = { name: empName, days: {}, shifts: 0, totalSecs: 0 };
       empSummary[empId].shifts += 1;
-      empSummary[empId].totalSecs += r.horas_trab_secs || 0;
-      empSummary[empId].days[day] = (empSummary[empId].days[day] || 0) + (r.horas_trab_secs || 0);
+      const secs = getTurnoWorkSecs(r);
+      empSummary[empId].totalSecs += secs;
+      empSummary[empId].days[day] = (empSummary[empId].days[day] || 0) + secs;
     });
-    const totalSec = cache.periodTurnos.reduce((s, r) => s + (r.horas_trab_secs || 0), 0);
+    const totalSec = cache.periodTurnos.reduce((s, r) => s + getTurnoWorkSecs(r), 0);
     rows.push([]);
     rows.push(["TOTAL", "", "", "", "", "", "", "", fmtH(totalSec), "", "", ""]);
     rows.push([]);
@@ -1225,12 +1282,12 @@
       const d = fmtDateLocal(t.entrada_at);
       const key = `${t.empleado_id}|${d}`;
       if (!actualByKey[key]) actualByKey[key] = { secs: 0, firstIn: null, lastOut: null, rows: [] };
-      actualByKey[key].secs += t.horas_trab_secs || 0;
+      actualByKey[key].secs += getTurnoWorkSecs(t);
       actualByKey[key].rows.push(t);
       if (!actualByKey[key].firstIn || new Date(t.entrada_at) < new Date(actualByKey[key].firstIn)) actualByKey[key].firstIn = t.entrada_at;
       if (t.salida_at && (!actualByKey[key].lastOut || new Date(t.salida_at) > new Date(actualByKey[key].lastOut))) actualByKey[key].lastOut = t.salida_at;
       const emp = ensure(t.empleado_id);
-      emp.actual += t.horas_trab_secs || 0;
+      emp.actual += getTurnoWorkSecs(t);
       emp.turnos += 1;
     });
     const scheduledKeys = new Set();

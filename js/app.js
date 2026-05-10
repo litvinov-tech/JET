@@ -77,6 +77,31 @@ function fmtSecsHM(secs) {
   const m = Math.floor((secs % 3600) / 60);
   return `${h}h ${String(m).padStart(2,"0")}m`;
 }
+function computeWorkSecs(r) {
+  if (!r || !r.entrada_at || !r.salida_at) return null;
+  const start = new Date(r.entrada_at).getTime();
+  const end = new Date(r.salida_at).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  let workSecs = Math.round((end - start) / 1000);
+  if (r.ini_descanso_at && r.fin_descanso_at) {
+    const lunchStart = new Date(r.ini_descanso_at).getTime();
+    const lunchEnd = new Date(r.fin_descanso_at).getTime();
+    if (Number.isFinite(lunchStart) && Number.isFinite(lunchEnd) && lunchEnd >= lunchStart) {
+      workSecs -= Math.round((lunchEnd - lunchStart) / 1000);
+    }
+  }
+  return Math.max(0, workSecs);
+}
+function getTurnoWorkSecs(r) {
+  if (!r?.salida_at) return 0;
+  const computed = computeWorkSecs(r);
+  const stored = Number(r?.horas_trab_secs);
+  if (!Number.isFinite(stored) || stored < 0) return computed || 0;
+  if (computed == null) return stored;
+  if (stored > 16 * 3600) return computed;
+  if (Math.abs(stored - computed) > 5 * 60) return computed;
+  return stored;
+}
 function fmtDuration(secs) {
   if (secs == null) return "—";
   if (secs < 60) return `${Math.round(secs)}s`;
@@ -705,7 +730,7 @@ function renderMisHoras(turnos, corrections, shifts) {
   const monday1 = mondayOffset(1);
   let secWeek = 0, secWeekPrev = 0, sec14 = 0;
   turnos.forEach(r => {
-    const sec = r.horas_trab_secs || 0;
+    const sec = getTurnoWorkSecs(r);
     sec14 += sec;
     const d = fmtDateLocal(r.entrada_at);
     if (d >= monday) secWeek += sec;
@@ -763,12 +788,7 @@ function renderMisHoras(turnos, corrections, shifts) {
         const hasLunch = r.horas_comida_secs && r.horas_comida_secs > 0;
         const lunchTxt = hasLunch ? `<div class="lunch-info">🍴 ${fmtDuration(r.horas_comida_secs)} comida</div>` : "";
         // Calcular horas trabajadas: si BD no las tiene aún, calcular desde timestamps
-        let workSecs = r.horas_trab_secs;
-        if (!workSecs && r.salida_at) {
-          const total = Math.max(0, (new Date(r.salida_at).getTime() - new Date(r.entrada_at).getTime()) / 1000);
-          const lunchSecs = (iniD && finD) ? Math.max(0, (new Date(r.fin_descanso_at).getTime() - new Date(r.ini_descanso_at).getTime()) / 1000) : 0;
-          workSecs = total - lunchSecs;
-        }
+        let workSecs = getTurnoWorkSecs(r);
         if (r.salida_at) {
           if (workSecs == null) hoursTxt = "—";
           else if (workSecs < 60) hoursTxt = `${Math.round(workSecs)}s`;
