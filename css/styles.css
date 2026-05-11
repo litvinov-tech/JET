@@ -2343,7 +2343,23 @@ body:has(#view-horarios.active) .tabs {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+}
+
+.hor-table {
+  min-width: max-content;
+}
+
+.hor-table th:first-child {
+  left: 0;
+  z-index: 4;
+  min-width: 88px;
+  text-align: left;
+  padding-left: 8px;
 }
 
 @media (max-width: 899px) {
